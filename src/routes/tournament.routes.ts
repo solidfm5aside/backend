@@ -6,16 +6,18 @@ import { createTournamentSchema } from '@/validators/tournament.validator';
 
 const router = Router();
 
-router.get('/:id', (req, res) => {
-    // Basic placeholder for get details
-    res.status(200).json({ success: true, message: 'Tournament details' });
-});
+// Public routes
+router.get('/archive', tournamentController.getTournamentArchive);
+router.get('/', tournamentController.getTournaments);
 
 // Admin only routes
 router.use(protect);
 router.use(restrictTo('admin', 'super_admin'));
 
+router.get('/:id/readiness', tournamentController.checkReadiness);
 router.post('/', validate(createTournamentSchema), tournamentController.createTournament);
-router.post('/:id/generate-fixtures', tournamentController.generateFixtures);
+router.patch('/:id', tournamentController.updateTournament);
+router.post('/:tournamentId/generate-fixtures', tournamentController.generateFixtures);
+router.post('/:tournamentId/generate-knockout', tournamentController.generateKnockout);
 
 export default router;

@@ -36,3 +36,17 @@ export const addEvent = async (req: Request, res: Response) => {
     res.status(400).json({ success: false, message: error.message || 'Failed to add event' });
   }
 };
+
+export const deleteEvent = async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    const eventId = req.params.eventId as string;
+    const match = await matchService.deleteMatchEvent(id, eventId);
+
+    res.status(200).json({ success: true, data: match, message: 'Event deleted successfully' });
+  } catch (error: any) {
+    logger.error('Delete Event Error:', error);
+    res.status(400).json({ success: false, message: error.message || 'Failed to delete event' });
+  }
+};
+

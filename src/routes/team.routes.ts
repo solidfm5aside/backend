@@ -4,12 +4,15 @@ import { protect, restrictTo } from '@/middleware/auth.middleware';
 import { validate } from '@/middleware/validate.middleware';
 import { createTeamSchema, updateTeamSchema, registerTeamSchema } from '@/validators/team.validator';
 
+import multer from 'multer';
+
 const router = Router();
+const upload = multer({ storage: multer.memoryStorage() });
 
 // Public routes (if any, e.g., get all teams for public view)
 router.get('/', teamController.getTeams);
 router.get('/:id', teamController.getTeam);
-router.post('/register', validate(registerTeamSchema), teamController.registerTeam);
+router.post('/register', upload.single('logo'), validate(registerTeamSchema), teamController.registerTeam);
 
 // Protected routes (Admin only)
 router.use(protect);

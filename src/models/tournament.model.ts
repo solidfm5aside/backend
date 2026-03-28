@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document } from 'mongoose';
+import { MatchStage } from './match.model';
 
 export enum TournamentStatus {
   UPCOMING = 'upcoming',
@@ -12,6 +13,9 @@ export interface ITournament extends Document {
   startDate: Date;
   endDate?: Date;
   status: TournamentStatus;
+  currentStage: MatchStage; 
+  leagueRounds: number;
+  fixturesGenerated: boolean;
   isDeleted: boolean;
 }
 
@@ -33,11 +37,25 @@ const tournamentSchema = new Schema<ITournament>(
     endDate: {
       type: Date,
     },
+    currentStage: {
+      type: String,
+      enum: Object.values(MatchStage),
+      default: MatchStage.LEAGUE,
+    },
+    leagueRounds: {
+      type: Number,
+      default: 6,
+    },
     status: {
       type: String,
       enum: Object.values(TournamentStatus),
       default: TournamentStatus.UPCOMING,
     },
+    fixturesGenerated: {
+      type: Boolean,
+      default: false,
+    },
+
     isDeleted: {
       type: Boolean,
       default: false,

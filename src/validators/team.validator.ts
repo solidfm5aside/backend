@@ -17,4 +17,5 @@ export const registerTeamSchema = z.object({
   captainName: z.string().min(2, 'Captain name is required'),
   contactPhone: z.string().min(7, 'Invalid phone number'),
   contactEmail: z.string().email('Invalid email address'),
+  logo: z.string().optional(),
 });

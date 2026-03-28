@@ -8,6 +8,7 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(32),
   JWT_REFRESH_SECRET: z.string().min(32),
   CLIENT_URL: z.string().url(),
+  CLOUDINARY_URL: z.string().url(),
 });
 
 export const validateEnv = () => {

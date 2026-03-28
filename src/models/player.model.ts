@@ -13,6 +13,7 @@ export interface IPlayer extends Document {
   jerseyNumber: number;
   nationality: string;
   teamId: mongoose.Types.ObjectId;
+  passportPic?: string;
   isDeleted: boolean;
 }
 
@@ -40,6 +41,9 @@ const playerSchema = new Schema<IPlayer>(
       type: Schema.Types.ObjectId,
       ref: 'Team',
       required: [true, 'Team reference is required'],
+    },
+    passportPic: {
+      type: String,
     },
     isDeleted: {
       type: Boolean,

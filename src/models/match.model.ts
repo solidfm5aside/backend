@@ -20,6 +20,17 @@ export interface IMatchEvent {
   playerId: mongoose.Types.ObjectId;
   teamId: mongoose.Types.ObjectId;
   details?: string;
+  assistPlayerId?: mongoose.Types.ObjectId;
+}
+
+
+export enum MatchStage {
+  LEAGUE = 'league',
+  PLAYOFF = 'playoff',
+  ROUND_OF_16 = 'round_of_16',
+  QUARTER_FINALS = 'quarter_finals',
+  SEMI_FINALS = 'semi_finals',
+  FINAL = 'final',
 }
 
 export interface IMatch extends Document {
@@ -30,11 +41,14 @@ export interface IMatch extends Document {
   awayScore: number;
   date: Date;
   status: MatchStatus;
+  stage: MatchStage;
+  round?: number;
   venue?: string;
   referee?: string;
   events: IMatchEvent[];
   isDeleted: boolean;
 }
+
 
 const matchEventSchema = new Schema<IMatchEvent>(
   {
@@ -58,8 +72,12 @@ const matchEventSchema = new Schema<IMatchEvent>(
       required: true,
     },
     details: String,
+    assistPlayerId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Player',
+    },
   },
-  { _id: false }
+  { _id: true }
 );
 
 const matchSchema = new Schema<IMatch>(
@@ -96,9 +114,16 @@ const matchSchema = new Schema<IMatch>(
       enum: Object.values(MatchStatus),
       default: MatchStatus.SCHEDULED,
     },
+    stage: {
+      type: String,
+      enum: Object.values(MatchStage),
+      default: MatchStage.LEAGUE,
+    },
+    round: Number,
     venue: String,
     referee: String,
     events: [matchEventSchema],
+
     isDeleted: {
       type: Boolean,
       default: false,

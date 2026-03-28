@@ -4,15 +4,20 @@ import logger from '@/utils/logger';
 
 export const getTeams = async (req: Request, res: Response) => {
   try {
-    const { page = 1, limit = 10 } = req.query;
+    const { page = 1, limit = 10, registrationStatus } = req.query;
     const skip = (Number(page) - 1) * Number(limit);
 
-    const teams = await Team.find({ isDeleted: false })
+    const query: any = { isDeleted: false };
+    if (registrationStatus && registrationStatus !== 'all') {
+      query.registrationStatus = registrationStatus;
+    }
+
+    const teams = await Team.find(query)
       .skip(skip)
       .limit(Number(limit))
-      .sort({ name: 1 });
+      .sort({ createdAt: -1 });
 
-    const total = await Team.countDocuments({ isDeleted: false });
+    const total = await Team.countDocuments(query);
 
     res.status(200).json({
       success: true,
@@ -86,10 +91,25 @@ export const deleteTeam = async (req: Request, res: Response) => {
   }
 };
 
+import { uploadLogo } from '@/utils/cloudinary';
+
 export const registerTeam = async (req: Request, res: Response) => {
   try {
+    const teamData = req.body;
+    let logoUrl = '';
+
+    const reqAny = req as any;
+    if (reqAny.file) {
+      try {
+        logoUrl = await uploadLogo(reqAny.file.buffer, teamData.name);
+      } catch (uploadError) {
+        logger.error('Logo upload failed, proceeding without logo:', uploadError);
+      }
+    }
+
     const team = await Team.create({
-      ...req.body,
+      ...teamData,
+      logo: logoUrl || teamData.logo, // Use uploaded URL, fallback to existing or empty
       registrationStatus: 'pending'
     });
     
@@ -101,7 +121,6 @@ export const registerTeam = async (req: Request, res: Response) => {
       message: 'Registration submitted successfully. We will contact you soon.' 
     });
   } catch (error: any) {
-    logger.error('Register Team Error:', error);
     const message = error.code === 11000 ? 'Team name already registered' : 'Registration failed';
     res.status(400).json({ success: false, message });
   }

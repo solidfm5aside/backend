@@ -1,69 +1,45 @@
 import logger from './logger';
 
-interface Pair {
+export interface Pair {
   team1: string;
   team2: string;
 }
 
 /**
- * Generates matches for a league phase where each team plays exactly `matchesPerTeam` unique opponents.
- * This uses a randomized greedy approach with retries.
+ * Generates matches for a league phase using the Circle Method.
+ * This guarantees that in each round, every team plays exactly once.
+ * For 28 teams, passing numRounds=6 gives the perfect 6-match UCL subset.
  */
-export const generateLeagueFixtures = (teamIds: string[], matchesPerTeam: number = 6): Pair[] => {
+export const generateLeagueFixtures = (teamIds: string[], numRounds: number = 6): Pair[][] => {
   const numTeams = teamIds.length;
-  if (numTeams < matchesPerTeam + 1) {
-    throw new Error(`At least ${matchesPerTeam + 1} teams are required for each to play ${matchesPerTeam} matches.`);
+  if (numTeams % 2 !== 0) {
+    throw new Error('Number of teams must be even for standard circle method.');
+  }
+  if (numRounds >= numTeams) {
+    throw new Error('numRounds must be less than the number of teams.');
   }
 
-  let attempt = 0;
-  const maxAttempts = 100;
+  // Shuffle teams initially so the schedule isn't identical every season
+  const teams = [...teamIds].sort(() => Math.random() - 0.5);
+  const rounds: Pair[][] = [];
 
-  while (attempt < maxAttempts) {
-    attempt++;
-    const pairs: Pair[] = [];
-    const teamMatchCounts = new Map<string, number>();
-    const teamOpponents = new Map<string, Set<string>>();
-
-    teamIds.forEach(id => {
-      teamMatchCounts.set(id, 0);
-      teamOpponents.set(id, new Set());
-    });
-
-    let possible = true;
-    const shuffledTeams = [...teamIds];
-
-    for (const teamA of shuffledTeams) {
-      while ((teamMatchCounts.get(teamA) || 0) < matchesPerTeam) {
-        // Find potential opponents: not self, not already played, and still need matches
-        const potentialOpponents = shuffledTeams.filter(teamB => 
-          teamB !== teamA && 
-          !teamOpponents.get(teamA)?.has(teamB) && 
-          (teamMatchCounts.get(teamB) || 0) < matchesPerTeam
-        );
-
-        if (potentialOpponents.length === 0) {
-          possible = false;
-          break;
-        }
-
-        // Pick a random opponent
-        const teamB = potentialOpponents[Math.floor(Math.random() * potentialOpponents.length)];
-
-        // Record the pair
-        pairs.push({ team1: teamA, team2: teamB });
-        teamMatchCounts.set(teamA, (teamMatchCounts.get(teamA) || 0) + 1);
-        teamMatchCounts.set(teamB, (teamMatchCounts.get(teamB) || 0) + 1);
-        teamOpponents.get(teamA)?.add(teamB);
-        teamOpponents.get(teamB)?.add(teamA);
-      }
-      if (!possible) break;
+  for (let round = 0; round < numRounds; round++) {
+    const roundPairs: Pair[] = [];
+    
+    // Pair opposing endpoints of the array
+    for (let i = 0; i < numTeams / 2; i++) {
+        roundPairs.push({
+            team1: teams[i],
+            team2: teams[numTeams - 1 - i]
+        });
     }
+    rounds.push(roundPairs);
 
-    if (possible) {
-      logger.info(`Successfully generated league fixtures after ${attempt} attempts.`);
-      return pairs;
-    }
+    // Circle rotation: Keep index 0 fixed, rotate the rest completely clockwise
+    const last = teams.pop()!;
+    teams.splice(1, 0, last);
   }
 
-  throw new Error('Failed to generate a valid league schedule after maximum attempts. Try again or check constraints.');
+  logger.info(`Successfully generated ${numRounds} rounds of fixtures using Circle Method.`);
+  return rounds;
 };

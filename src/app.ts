@@ -12,6 +12,7 @@ import playerRoutes from '@/routes/player.routes';
 import tournamentRoutes from '@/routes/tournament.routes';
 import matchRoutes from '@/routes/match.routes';
 import standingsRoutes from '@/routes/standings.routes';
+import venueRoutes from '@/routes/venue.routes';
 import paymentRoutes from '@/routes/payment.routes';
 import dashboardRoutes from '@/routes/dashboard.routes';
 
@@ -30,8 +31,11 @@ app.use(morgan('combined', { stream: { write: (message) => logger.http(message.t
 // Rate limiting
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000'),
-  max: parseInt(process.env.RATE_LIMIT_MAX || '100'),
-  message: 'Too many requests from this IP, please try again after 15 minutes'
+  max: process.env.NODE_ENV === 'development' ? 10000 : parseInt(process.env.RATE_LIMIT_MAX || '100'),
+  message: {
+    success: false,
+    message: 'Too many requests from this IP, please try again after 15 minutes'
+  }
 });
 app.use('/api', limiter);
 
@@ -39,8 +43,9 @@ app.use('/api', limiter);
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/teams', teamRoutes);
 app.use('/api/v1/players', playerRoutes);
-app.use('/api/v1/tournament', tournamentRoutes);
+app.use('/api/v1/tournaments', tournamentRoutes);
 app.use('/api/v1/matches', matchRoutes);
+app.use('/api/v1/venues', venueRoutes);
 app.use('/api/v1/standings', standingsRoutes);
 app.use('/api/v1/payments', paymentRoutes);
 app.use('/api/v1/dashboard', dashboardRoutes);

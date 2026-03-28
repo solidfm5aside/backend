@@ -46,6 +46,8 @@ export const getPlayer = async (req: Request, res: Response) => {
   }
 };
 
+import { uploadPassportPic } from '@/utils/cloudinary';
+
 export const createPlayer = async (req: Request, res: Response) => {
   try {
     // Check if team exists
@@ -54,7 +56,23 @@ export const createPlayer = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: 'Invalid team ID' });
     }
 
-    const player = await Player.create(req.body);
+    const playerData = req.body;
+    let passportUrl = '';
+
+    const reqAny = req as any;
+    if (reqAny.file) {
+      try {
+        passportUrl = await uploadPassportPic(reqAny.file.buffer, playerData.name);
+      } catch (uploadError) {
+        logger.error('Passport upload failed, proceeding without pic:', uploadError);
+      }
+    }
+
+    const player = await Player.create({
+      ...playerData,
+      passportPic: passportUrl || playerData.passportPic
+    });
+    
     res.status(201).json({ success: true, data: player, message: 'Player created successfully' });
   } catch (error) {
     logger.error('Create Player Error:', error);

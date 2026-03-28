@@ -15,5 +15,7 @@ router.use(restrictTo('admin', 'super_admin'));
 
 router.patch('/:id/status', validate(updateMatchStatusSchema), matchController.updateStatus);
 router.post('/:id/events', validate(addMatchEventSchema), matchController.addEvent);
+router.delete('/:id/events/:eventId', matchController.deleteEvent);
+
 
 export default router;
