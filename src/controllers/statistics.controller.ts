@@ -1,11 +1,14 @@
 import { Request, Response } from 'express';
-import * as StandingsService from '@/services/standings.service';
+import { 
+  getTopScorers as getTopScorersService, 
+  getTournamentStandings as getTournamentStandingsService 
+} from '../services/standings.service';
 import logger from '@/utils/logger';
 
 export const getTopScorers = async (req: Request, res: Response) => {
   try {
     const { tournamentId } = req.params;
-    const scorers = await StandingsService.getTopScorers(tournamentId);
+    const scorers = await getTopScorersService(tournamentId as string);
     
     res.status(200).json({
       success: true,
@@ -23,7 +26,7 @@ export const getTopScorers = async (req: Request, res: Response) => {
 export const getStandings = async (req: Request, res: Response) => {
   try {
     const { tournamentId } = req.params;
-    const standings = await StandingsService.getTournamentStandings(tournamentId);
+    const standings = await getTournamentStandingsService(tournamentId as string);
     
     res.status(200).json({
       success: true,
