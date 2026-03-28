@@ -49,4 +49,26 @@ export const uploadPassportPic = async (fileBuffer: Buffer, playerName: string):
   });
 };
 
+export const uploadSponsorLogo = async (fileBuffer: Buffer): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const uploadStream = cloudinary.uploader.upload_stream(
+      {
+        folder: 'solidfm/sponsors',
+        public_id: `sponsor_logo_${Date.now()}`,
+        resource_type: 'auto',
+      },
+      (error, result) => {
+        if (error || !result) {
+          logger.error('Cloudinary Sponsor Logo Upload Error:', error);
+          reject(new Error('Failed to upload sponsor logo to Cloudinary'));
+        } else {
+          resolve(result.secure_url);
+        }
+      }
+    );
+
+    uploadStream.end(fileBuffer);
+  });
+};
+
 export default cloudinary;

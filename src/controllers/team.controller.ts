@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import Team from '@/models/team.model';
+import { Setting } from '@/models/setting.model';
 import logger from '@/utils/logger';
 
 export const getTeams = async (req: Request, res: Response) => {
@@ -95,6 +96,11 @@ import { uploadLogo } from '@/utils/cloudinary';
 
 export const registerTeam = async (req: Request, res: Response) => {
   try {
+    const regLiveSetting = await Setting.findOne({ key: 'registration_live' });
+    if (!regLiveSetting || (regLiveSetting.value !== 'true' && regLiveSetting.value !== true)) {
+      return res.status(403).json({ success: false, message: 'Registration is currently closed by the administrator.' });
+    }
+
     const teamData = req.body;
     let logoUrl = '';
 

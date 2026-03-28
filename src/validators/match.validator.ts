@@ -14,3 +14,8 @@ export const addMatchEventSchema = z.object({
   details: z.string().optional(),
 });
 
+export const updateMatchDetailsSchema = z.object({
+  date: z.string().datetime().optional(),
+  venue: z.string().optional(),
+});
+

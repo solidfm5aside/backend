@@ -19,6 +19,21 @@ export const updateMatchStatus = async (matchId: string, status: string) => {
   return match;
 };
 
+export const updateMatchDetails = async (matchId: string, details: { date?: string; venue?: string }) => {
+  const match = await Match.findByIdAndUpdate(
+    matchId,
+    { $set: details },
+    { new: true }
+  ).populate('homeTeam awayTeam', 'name logo')
+   .populate('events.playerId', 'name')
+   .populate('events.assistPlayerId', 'name');
+
+  if (match) {
+    broadcastMatchUpdate(matchId, match);
+  }
+  return match;
+};
+
 export const addMatchEvent = async (matchId: string, event: any) => {
   const match = await Match.findById(matchId);
   if (!match) throw new Error('Match not found');

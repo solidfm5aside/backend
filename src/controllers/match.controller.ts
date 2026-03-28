@@ -27,6 +27,16 @@ export const updateStatus = async (req: Request, res: Response) => {
   }
 };
 
+export const updateDetails = async (req: Request, res: Response) => {
+  try {
+    const match = await matchService.updateMatchDetails(req.params.id as string, req.body);
+    if (!match) return res.status(404).json({ success: false, message: 'Match not found' });
+    res.status(200).json({ success: true, data: match, message: 'Match details updated successfully' });
+  } catch (error) {
+    res.status(400).json({ success: false, message: 'Failed to update match details' });
+  }
+};
+
 export const addEvent = async (req: Request, res: Response) => {
   try {
     const match = await matchService.addMatchEvent(req.params.id as string, req.body);
