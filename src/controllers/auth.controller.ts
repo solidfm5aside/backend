@@ -2,7 +2,8 @@ import { Request, Response, NextFunction } from 'express';
 import Admin, { AdminRole } from '@/models/admin.model';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '@/utils/jwt.util';
 import logger from '@/utils/logger';
-import { loginSchema, registerSchema } from '@/validators/auth.validator';
+import { loginSchema, registerSchema, forgotPasswordSchema, resetPasswordSchema } from '@/validators/auth.validator';
+import crypto from 'crypto';
 
 export const register = async (req: Request, res: Response) => {
   try {
@@ -135,5 +136,76 @@ export const getAdmins = async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Get Admins Error:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch admins' });
+  }
+};
+
+export const forgotPassword = async (req: Request, res: Response) => {
+  try {
+    const { email } = forgotPasswordSchema.parse(req.body);
+    const admin = await Admin.findOne({ email });
+
+    if (!admin || admin.isDeleted) {
+      // For security, don't reveal that the user does not exist
+      return res.status(200).json({ 
+        success: true, 
+        message: 'If an account exists with that email, a reset link has been sent.' 
+      });
+    }
+
+    const resetToken = admin.createPasswordResetToken();
+    await admin.save({ validateBeforeSave: false });
+
+    // Construct reset URL
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const resetUrl = `${frontendUrl}/reset-password/${resetToken}`;
+
+    // Log the link to console as requested
+    console.log('\n----------------------------------------');
+    console.log('PASSWORD RESET LINK (MOCK EMAIL)');
+    console.log(`To: ${admin.email}`);
+    console.log(`Link: ${resetUrl}`);
+    console.log('----------------------------------------\n');
+
+    logger.info(`Password reset token generated for ${admin.email}`);
+
+    res.status(200).json({
+      success: true,
+      message: 'If an account exists with that email, a reset link has been sent.'
+    });
+  } catch (error: any) {
+    logger.error('Forgot Password Error:', error);
+    res.status(400).json({ success: false, message: error.message || 'Error processing request' });
+  }
+};
+
+export const resetPassword = async (req: Request, res: Response) => {
+  try {
+    const { token } = req.params;
+    const { password } = resetPasswordSchema.parse(req.body);
+
+    const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+
+    const admin = await Admin.findOne({
+      passwordResetToken: hashedToken,
+      passwordResetExpires: { $gt: Date.now() },
+    }).select('+password');
+
+    if (!admin) {
+      return res.status(400).json({ success: false, message: 'Token is invalid or has expired' });
+    }
+
+    admin.password = password;
+    admin.passwordResetToken = undefined;
+    admin.passwordResetExpires = undefined;
+    admin.passwordChangedAt = new Date();
+    await admin.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Password has been reset successfully. You can now log in.'
+    });
+  } catch (error: any) {
+    logger.error('Reset Password Error:', error);
+    res.status(400).json({ success: false, message: error.message || 'Error resetting password' });
   }
 };

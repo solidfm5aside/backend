@@ -1,6 +1,7 @@
 import Standings from '@/models/standings.model';
 import PlayerStats from '@/models/player-stats.model';
 import Match from '@/models/match.model';
+import Tournament from '@/models/tournament.model';
 import logger from '@/utils/logger';
 
 /**
@@ -119,8 +120,33 @@ export const getTournamentStandings = async (tournamentId: string) => {
 
 export const getTopScorers = async (tournamentId: string) => {
   return await PlayerStats.find({ tournamentId })
-    .populate('playerId', 'firstName lastName')
+    .populate('playerId', 'name')
     .populate('teamId', 'name logo')
-    .sort({ goals: -1 })
+    .sort({ goals: -1, assists: -1 })
     .limit(10);
 };
+
+export const getGlobalTournamentStandings = async () => {
+  const tournaments = await Tournament.find({ isDeleted: false, status: { $ne: 'scheduled' } })
+    .sort({ createdAt: -1 });
+
+  const result = [];
+  for (const t of tournaments) {
+    const stats = await getTournamentStandings(t._id.toString());
+    result.push({
+      tournamentId: t,
+      stats: stats
+    });
+  }
+  return result;
+};
+
+export const getGlobalTopScorers = async () => {
+  const tournament = await Tournament.findOne({ isDeleted: false, status: { $ne: 'scheduled' } })
+    .sort({ createdAt: -1 });
+
+  if (!tournament) return [];
+  return await getTopScorers(tournament._id.toString());
+};
+
+

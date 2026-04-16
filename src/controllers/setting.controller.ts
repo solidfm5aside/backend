@@ -50,7 +50,7 @@ export const updateSettings = async (req: Request, res: Response) => {
   }
 };
 
-import { uploadSponsorLogo } from '@/utils/cloudinary';
+import { uploadSponsorLogo, uploadPublicityBanner } from '@/utils/cloudinary';
 
 export const handleUploadSponsorLogo = async (req: Request, res: Response) => {
   try {
@@ -64,6 +64,24 @@ export const handleUploadSponsorLogo = async (req: Request, res: Response) => {
       success: true,
       message: 'Sponsor logo uploaded successfully',
       data: { url: logoUrl }
+    });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const handleUploadPublicityBanner = async (req: Request, res: Response) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No image file provided' });
+    }
+
+    const bannerUrl = await uploadPublicityBanner(req.file.buffer);
+
+    res.status(200).json({
+      success: true,
+      message: 'Publicity banner uploaded successfully',
+      data: { url: bannerUrl }
     });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });

@@ -15,7 +15,11 @@ export interface IAdmin extends Document {
   lastLogin?: Date;
   isVerified: boolean;
   isDeleted: boolean;
+  passwordChangedAt?: Date;
+  passwordResetToken?: string;
+  passwordResetExpires?: Date;
   comparePassword(password: string): Promise<boolean>;
+  createPasswordResetToken(): string;
 }
 
 const adminSchema = new Schema<IAdmin>(
@@ -56,11 +60,28 @@ const adminSchema = new Schema<IAdmin>(
       type: Boolean,
       default: false,
     },
+    passwordChangedAt: Date,
+    passwordResetToken: String,
+    passwordResetExpires: Date,
   },
   {
     timestamps: true,
   }
 );
+
+// Method to create password reset token
+adminSchema.methods.createPasswordResetToken = function () {
+  const resetToken = require('crypto').randomBytes(32).toString('hex');
+
+  this.passwordResetToken = require('crypto')
+    .createHash('sha256')
+    .update(resetToken)
+    .digest('hex');
+
+  this.passwordResetExpires = Date.now() + 10 * 60 * 1000; // 10 minutes
+
+  return resetToken;
+};
 
 // Password hashing
 adminSchema.pre<IAdmin>('save', async function () {

@@ -88,4 +88,16 @@ export const generateKnockout = async (req: any, res: Response) => {
   }
 };
 
-
+/**
+ * GET /tournaments/:tournamentId/bracket  (Public)
+ * Returns structured bracket data for all knockout stages.
+ */
+export const getBracket = async (req: Request, res: Response) => {
+  try {
+    const bracket = await tournamentService.getBracketData(req.params.tournamentId as string);
+    res.status(200).json({ success: true, data: bracket });
+  } catch (error: any) {
+    logger.error('Get Bracket Error:', error);
+    res.status(400).json({ success: false, message: error.message || 'Failed to fetch bracket data' });
+  }
+};

@@ -108,10 +108,48 @@ export const deleteMatchEvent = async (matchId: string, eventId: string) => {
 };
 
 export const getMatches = async (filter: any = {}) => {
-  return await Match.find(filter)
+  // Support filtering by stage
+  const query: any = { isDeleted: false };
+  if (filter.tournamentId) query.tournamentId = filter.tournamentId;
+  if (filter.status) query.status = filter.status;
+  if (filter.stage) query.stage = filter.stage;
+
+  return await Match.find(query)
     .populate('homeTeam awayTeam', 'name logo')
     .populate('events.playerId', 'name')
     .populate('events.assistPlayerId', 'name')
     .sort({ date: 1 });
+};
 
+/**
+ * Explicitly sets the winner of a knockout match.
+ * Call this after Extra Time and/or a Penalty Shootout.
+ * @param matchId - The match to resolve
+ * @param winnerId - The ObjectId of the team that advances
+ * @param isExtraTime - True if the match required extra time
+ * @param shootoutScore - Optional: set only when pens were needed { home: number, away: number }
+ */
+export const updateMatchWinner = async (
+  matchId: string,
+  winnerId: string,
+  isExtraTime: boolean,
+  shootoutScore?: { home: number; away: number }
+) => {
+  const updatePayload: any = { winner: winnerId, isExtraTime };
+  if (shootoutScore) {
+    updatePayload.shootoutScore = shootoutScore;
+  }
+
+  const match = await Match.findByIdAndUpdate(
+    matchId,
+    { $set: updatePayload },
+    { new: true }
+  )
+    .populate('homeTeam awayTeam', 'name logo')
+    .populate('winner', 'name');
+
+  if (!match) throw new Error('Match not found');
+
+  broadcastMatchUpdate(matchId, match);
+  return match;
 };

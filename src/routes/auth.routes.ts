@@ -9,6 +9,8 @@ router.post('/login', authController.login);
 router.post('/register', authController.register);
 router.post('/refresh-token', authController.refreshToken);
 router.post('/logout', authController.logout);
+router.post('/forgot-password', authController.forgotPassword);
+router.patch('/reset-password/:token', authController.resetPassword);
 
 // Administrative routes
 router.get('/', protect, restrictTo(AdminRole.SUPER_ADMIN, AdminRole.ADMIN), authController.getAdmins);

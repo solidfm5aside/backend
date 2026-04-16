@@ -9,6 +9,7 @@ const router = Router();
 // Public routes
 router.get('/archive', tournamentController.getTournamentArchive);
 router.get('/', tournamentController.getTournaments);
+router.get('/:tournamentId/bracket', tournamentController.getBracket);
 
 // Admin only routes
 router.use(protect);

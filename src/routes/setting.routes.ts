@@ -17,5 +17,6 @@ router.put('/', settingController.updateSettings);
 
 // Protected route to upload images directly to cloudinary
 router.post('/upload-logo', upload.single('logo'), settingController.handleUploadSponsorLogo);
+router.post('/upload-publicity', upload.single('image'), settingController.handleUploadPublicityBanner);
 
 export default router;

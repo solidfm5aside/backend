@@ -47,6 +47,10 @@ export interface IMatch extends Document {
   referee?: string;
   events: IMatchEvent[];
   isDeleted: boolean;
+  // Knockout fields
+  isExtraTime?: boolean;     // true if the match required extra time
+  winner?: mongoose.Types.ObjectId; // the team that advances (source of truth)
+  shootoutScore?: { home: number; away: number }; // set only if pens were needed
 }
 
 
@@ -123,7 +127,19 @@ const matchSchema = new Schema<IMatch>(
     venue: String,
     referee: String,
     events: [matchEventSchema],
-
+    // Knockout resolution fields
+    isExtraTime: {
+      type: Boolean,
+      default: false,
+    },
+    winner: {
+      type: Schema.Types.ObjectId,
+      ref: 'Team',
+    },
+    shootoutScore: {
+      home: { type: Number },
+      away: { type: Number },
+    },
     isDeleted: {
       type: Boolean,
       default: false,

@@ -60,3 +60,29 @@ export const deleteEvent = async (req: Request, res: Response) => {
   }
 };
 
+/**
+ * PATCH /matches/:id/winner
+ * Sets the advancing winner of a knockout match after Extra Time / Penalty Shootout.
+ * Body: { winnerId: string, isExtraTime: boolean, shootoutScore?: { home: number, away: number } }
+ */
+export const setWinner = async (req: Request, res: Response) => {
+  try {
+    const { winnerId, isExtraTime, shootoutScore } = req.body;
+
+    if (!winnerId) {
+      return res.status(400).json({ success: false, message: 'winnerId is required' });
+    }
+
+    const match = await matchService.updateMatchWinner(
+      req.params.id,
+      winnerId,
+      !!isExtraTime,
+      shootoutScore
+    );
+
+    res.status(200).json({ success: true, data: match, message: 'Match winner set successfully' });
+  } catch (error: any) {
+    logger.error('Set Winner Error:', error);
+    res.status(400).json({ success: false, message: error.message || 'Failed to set match winner' });
+  }
+};

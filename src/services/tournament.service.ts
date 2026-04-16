@@ -272,15 +272,22 @@ export const generateKnockoutFixtures = async (tournamentId: string, stage: Matc
         }
       }
     } else {
-      // For later stages (QF, SF, Final), we take winners of the PREVIOUS stage
+      // For later stages (QF, SF, Final), use the explicit `winner` field.
+      // This is set by the Match Console via PATCH /matches/:id/winner after ET or penalties.
       const prevStage = getPreviousStage(stage);
       const prevMatches = await Match.find({ tournamentId, stage: prevStage, isDeleted: false });
-      
-      const winners = prevMatches.map(m => {
-        if (m.homeScore > m.awayScore) return m.homeTeam.toString();
-        if (m.awayScore > m.homeScore) return m.awayTeam.toString();
-        return m.homeTeam.toString(); 
-      });
+
+      const winners = prevMatches
+        .map(m => m.winner?.toString())
+        .filter(Boolean) as string[];
+
+      if (winners.length < prevMatches.length) {
+        const missing = prevMatches.length - winners.length;
+        throw new Error(
+          `Cannot generate ${stage} fixtures. ${missing} match(es) in ${prevStage} still have no winner set. ` +
+          `Please complete all matches and set the winner via the Match Console.`
+        );
+      }
 
       if (winners.length < 2) throw new Error(`Insufficient winners for ${stage}`);
 
@@ -348,4 +355,45 @@ const getPreviousStage = (stage: MatchStage): MatchStage => {
     case MatchStage.FINAL: return MatchStage.SEMI_FINALS;
     default: return MatchStage.LEAGUE;
   }
+};
+
+/**
+ * Returns a structured bracket data object for the public-facing bracket UI.
+ * Each stage contains the matches with populated team names and winner info.
+ */
+export const getBracketData = async (tournamentId: string) => {
+  const knockoutStages = [
+    MatchStage.PLAYOFF,
+    MatchStage.ROUND_OF_16,
+    MatchStage.QUARTER_FINALS,
+    MatchStage.SEMI_FINALS,
+    MatchStage.FINAL,
+  ];
+
+  const bracket: Record<string, any[]> = {};
+
+  for (const stage of knockoutStages) {
+    const matches = await Match.find({ tournamentId, stage, isDeleted: false })
+      .populate('homeTeam', 'name')
+      .populate('awayTeam', 'name')
+      .populate('winner', 'name')
+      .sort({ date: 1 })
+      .lean();
+
+    bracket[stage] = matches.map(m => ({
+      _id: m._id,
+      homeTeam: m.homeTeam,
+      awayTeam: m.awayTeam,
+      homeScore: m.homeScore,
+      awayScore: m.awayScore,
+      status: m.status,
+      date: m.date,
+      venue: m.venue,
+      winner: m.winner,
+      isExtraTime: m.isExtraTime,
+      shootoutScore: m.shootoutScore,
+    }));
+  }
+
+  return bracket;
 };

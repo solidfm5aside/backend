@@ -71,4 +71,26 @@ export const uploadSponsorLogo = async (fileBuffer: Buffer): Promise<string> => 
   });
 };
 
+export const uploadPublicityBanner = async (fileBuffer: Buffer): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const uploadStream = cloudinary.uploader.upload_stream(
+      {
+        folder: 'solidfm/publicity',
+        public_id: `ad_banner_${Date.now()}`,
+        resource_type: 'auto',
+      },
+      (error, result) => {
+        if (error || !result) {
+          logger.error('Cloudinary Publicity Upload Error:', error);
+          reject(new Error('Failed to upload publicity banner to Cloudinary'));
+        } else {
+          resolve(result.secure_url);
+        }
+      }
+    );
+
+    uploadStream.end(fileBuffer);
+  });
+};
+
 export default cloudinary;
