@@ -1,5 +1,6 @@
 import Team from '@/models/team.model';
 import { sendEmail } from '@/utils/mailer';
+import { getBroadcastTemplate } from '@/utils/email-templates';
 import logger from '@/utils/logger';
 
 /**
@@ -24,9 +25,8 @@ export const sendBroadcast = async (message: string, subject: string = 'Tourname
     logger.info(`Sending broadcast to ${recipientEmails.length} recipients...`);
 
     // We send to recipients as BCC for privacy
-    // Note: Some SMTP servers limit BCC size, but for ~100 teams it should be fine.
-    // If you have 1000+ teams, you might need a loop or Mailgun/SendGrid batching.
-    await sendEmail(recipientEmails, subject, message);
+    const html = getBroadcastTemplate(subject, message);
+    await sendEmail(recipientEmails, subject, message, html);
 
     return {
        recipientCount: recipientEmails.length,

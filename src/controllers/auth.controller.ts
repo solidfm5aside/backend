@@ -4,6 +4,8 @@ import { signAccessToken, signRefreshToken, verifyRefreshToken } from '@/utils/j
 import logger from '@/utils/logger';
 import { loginSchema, registerSchema, forgotPasswordSchema, resetPasswordSchema } from '@/validators/auth.validator';
 import crypto from 'crypto';
+import { sendEmail } from '@/utils/mailer';
+import { getPasswordResetTemplate } from '@/utils/email-templates';
 
 export const register = async (req: Request, res: Response) => {
   try {
@@ -159,14 +161,21 @@ export const forgotPassword = async (req: Request, res: Response) => {
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
     const resetUrl = `${frontendUrl}/reset-password/${resetToken}`;
 
-    // Log the link to console as requested
-    console.log('\n----------------------------------------');
-    console.log('PASSWORD RESET LINK (MOCK EMAIL)');
-    console.log(`To: ${admin.email}`);
-    console.log(`Link: ${resetUrl}`);
-    console.log('----------------------------------------\n');
-
-    logger.info(`Password reset token generated for ${admin.email}`);
+    // Send the actual email
+    try {
+      const html = getPasswordResetTemplate(admin.name, resetUrl);
+      await sendEmail(
+        [admin.email],
+        'Reset Your Password - SolidFM',
+        `Please reset your password using this link: ${resetUrl}`,
+        html
+      );
+      logger.info(`Password reset email sent to ${admin.email}`);
+    } catch (emailError) {
+      logger.error('Failed to send reset email:', emailError);
+      // We don't throw here to avoid revealing account existence, 
+      // but we've already logged the error.
+    }
 
     res.status(200).json({
       success: true,
