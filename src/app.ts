@@ -59,7 +59,7 @@ app.use('/api/v1/broadcast', broadcastRoutes);
 // Root route
 app.get('/', (req: Request, res: Response) => {
   res.status(200).json({ 
-    message: 'Welcome to CodeJude Football Tournament API',
+    message: 'Welcome to SolidFM Football Tournament API',
     version: '1.0.0',
     docs: '/health'
   });

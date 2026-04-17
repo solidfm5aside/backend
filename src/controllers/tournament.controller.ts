@@ -6,9 +6,9 @@ export const createTournament = async (req: Request, res: Response) => {
   try {
     const tournament = await tournamentService.createTournament(req.body);
     res.status(201).json({ success: true, data: tournament });
-  } catch (error) {
+  } catch (error: any) {
     logger.error('Create Tournament Error:', error);
-    res.status(400).json({ success: false, message: 'Failed to create tournament' });
+    res.status(400).json({ success: false, message: error.message || 'Failed to create tournament' });
   }
 };
 
