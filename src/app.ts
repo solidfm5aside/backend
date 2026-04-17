@@ -25,11 +25,11 @@ const app = express();
 app.use(helmet());
 app.use(compression());
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:3000',
+  origin: process.env.CLIENT_URL ? process.env.CLIENT_URL.split(',') : ['http://localhost:3000'],
   credentials: true
 }));
 app.use(express.json());
-app.use(morgan('combined', { stream: { write: (message) => logger.http(message.trim()) } }));
+app.use(morgan('combined', { stream: { write: (message: string) => logger.http(message.trim()) } }));
 
 // Rate limiting
 const limiter = rateLimit({
