@@ -1,81 +1,153 @@
-# Solid FM 5-Aside Football — Backend
+# Solid FM 5-Aside Football — Backend API
 
-The official API engine for the **Solid FM 5-Aside Football League**. A high-performance, secure Node.js backend designed to handle real-time tournament logistics, automated league standings, and global administrative broadcasts.
+The high-performance API engine powering the **Solid FM 5-Aside Football League**. Built with a focus on real-time tournament logistics, automated league standings, and secure administrative control.
 
----
-
-## 🚀 Core Technical Features
-
-*   **🏆 Automated Match Engine**: Handles both League (Points/GD) and Knockout (Extra Time/Shootout) logic with professional tie-breaking rules (Goals > Assists).
-*   **🛰️ Broadcast Alert System**: Integrated **SMTP (Namecheap cPanel)** mailing service that allows admins to send urgent updates to all registered team captains instantly.
-*   **🔒 Secure Admin Shield**: Robust JWT-based authentication with separate Access and Refresh tokens. Includes role-based protection (`super_admin` vs `admin`) and account verification logic.
-*   **📊 Live Standings Service**: Optimized database queries for real-time calculation of points, goal difference, and player statistics (Golden Boot tracking).
-*   **🖼️ Asset Management**: Integrated Cloudinary support for high-performance delivery of team logos and tournament publicity banners.
+This documentation is designed to help developers understand, deploy, and extend the SolidFM backend ecosystem.
 
 ---
 
-## 🛠️ Technology Stack
+## 🚀 Technology Stack
 
 - **Runtime**: [Node.js](https://nodejs.org/) (v18+)
 - **Framework**: [Express.js](https://expressjs.com/)
-- **Language**: [TypeScript](https://www.typescriptlang.org/) (Strict Mode)
+- **Language**: [TypeScript](https://www.typescriptlang.org/) (Strict Type Checking)
 - **Database**: [MongoDB](https://www.mongodb.com/) via [Mongoose](https://mongoosejs.com/)
-- **Authentication**: [JSON Web Tokens (JWT)](https://jwt.io/)
-- **Mailing**: [Nodemailer](https://nodemailer.com/)
-- **Storage**: [Cloudinary SDK](https://cloudinary.com/documentation/node_integration)
-- **Logger**: [Winston](https://github.com/winstonjs/winston)
+- **Real-time**: [Socket.io](https://socket.io/) (Live match updates)
+- **Mailing**: [Nodemailer](https://nodemailer.com/) (SMTP)
+- **Storage**: [Cloudinary](https://cloudinary.com/) (Assets & Publicity)
+- **Validation**: [Zod](https://zod.dev/)
 
 ---
 
-## 📂 Project Structure
+## ⚙️ Environment Configuration
 
-```text
-src/
-├── controllers/    # API request handlers
-├── middleware/     # Auth, Role-protection, Validation guards
-├── models/         # Mongoose schemas (Admin, Team, Match, etc.)
-├── routes/         # API endpoint definitions
-├── services/       # Core business logic (Standings, Matches, Broadcast)
-├── utils/          # Helper utilities (Mailer, JWT, Logger)
-└── validators/     # Zod-based request validation
-```
-
----
-
-## ⚙️ Setup & Configuration
-
-### 1. Environment Configuration
-Create a `.env` file in the root directory and configure the following variables:
+Create a `.env` file in the root directory. Below is the required schema:
 
 ```bash
-# Database & Auth
-MONGODB_URI=your_mongodb_connection_string
-JWT_SECRET=your_32_char_secret
-JWT_REFRESH_SECRET=your_32_char_refresh_secret
+# Server Config
+PORT=5000
+NODE_ENV=development # production
 
-# External Services
-CLOUDINARY_URL=your_cloudinary_config
+# Database
+MONGODB_URI=mongodb+srv://...
+
+# Security (JWT)
+JWT_SECRET=your_32_char_access_secret
+JWT_REFRESH_SECRET=your_32_char_refresh_secret
+JWT_EXPIRE=15m
+JWT_REFRESH_EXPIRE=7d
+
+# Third Party Services
+CLOUDINARY_URL=cloudinary://...
 SMTP_HOST=mail.privateemail.com
 SMTP_PORT=465
 SMTP_USER=admin@yourdomain.com
 SMTP_PASS=your_email_password
 SMTP_FROM_NAME='SolidFM Football'
 SMTP_FROM_EMAIL=noreply@yourdomain.com
+
+# Client Link
+CLIENT_URL=http://localhost:3000
 ```
 
-### 2. Installation & Development
-```bash
-# Install dependencies
-npm install
+---
 
-# Run development server (with auto-reload)
-npm run dev
+## 🔒 Authentication Flow
 
-# Build for production
-npm run build
+The API uses **JWT (JSON Web Tokens)** for stateless authentication. 
+
+1.  **Acquire Token**: Send credentials to `POST /api/v1/auth/login`.
+2.  **Authorization Header**: For all protected routes, include the Access Token in the header:
+    `Authorization: Bearer <your_access_token>`
+3.  **Token Rotation**: Use the `refreshToken` endpoint to get a new `accessToken` without re-logging in.
+
+---
+
+## 🛠️ API Reference
+
+### 🔐 Authentication (`/api/v1/auth`)
+| Method | Endpoint | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/register` | Public | Register new admin (1st becomes Super Admin) |
+| `POST` | `/login` | Public | Authenticate and receive tokens |
+| `POST` | `/refresh-token` | Public | Rotate expired access tokens |
+| `POST` | `/forgot-password` | Public | Trigger password reset email |
+| `PATCH` | `/reset-password/:token` | Public | Complete password reset |
+| `GET` | `/` | Admin | List all registered staff/admins |
+| `PATCH` | `/verify/:id` | Super Admin | Verify a new admin account |
+
+### 🏆 Tournaments (`/api/v1/tournaments`)
+| Method | Endpoint | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/` | Public | Get all active/upcoming tournaments |
+| `GET` | `/archive` | Public | View historical results |
+| `GET` | `/:id/bracket` | Public | Get knockout stage bracket data |
+| `POST` | `/` | Admin | Create a new tournament season |
+| `PATCH` | `/:id` | Admin | Update tournament details/status |
+| `GET` | `/:id/readiness` | Admin | Verification if teams/players meet requirements |
+| `POST` | `/:id/generate-fixtures` | Admin | Initialize League phase matches |
+| `POST` | `/:id/generate-knockout` | Admin | Initialize Knockout phase (Round of 16/etc) |
+
+### ⚽ Matches (`/api/v1/matches`)
+| Method | Endpoint | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/` | Public | List matches (filterable by tournament) |
+| `PATCH` | `/:id/status` | Admin | Update status (Scheduled -> Ongoing -> Finished) |
+| `PATCH` | `/:id/details` | Admin | Update scores, time, or stage |
+| `PATCH` | `/:id/winner` | Admin | Set winner for knockout (Extra Time/Pens) |
+| `POST` | `/:id/events` | Admin | Add Goal, Yellow, or Red Card |
+| `DELETE` | `/:id/events/:eventId` | Admin | Remove a specific match event |
+
+### 🛡️ Teams & Players (`/api/v1/teams` & `../../players`)
+| Method | Endpoint | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/teams/register` | Public | Public team registration for new seasons |
+| `GET` | `/teams/:id` | Public | Detailed team profile |
+| `PATCH` | `/teams/:id` | Admin | Update team info or registration status |
+| `POST` | `/players` | Admin | Register new player with Passport Upload |
+| `GET` | `/players/:id` | Public | Individual player stats and profile |
+
+### 📊 Standings & Statistics (`/api/v1/standings`)
+| Method | Endpoint | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/` | Public | Global league table (aggregate) |
+| `GET` | `/:tournamentId` | Public | Tournament-specific standings |
+| `GET` | `/top-scorers` | Public | Golden Boot race (Goals & Assists) |
+
+### 📡 Administrative Tools
+| Method | Endpoint | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/api/v1/broadcast` | Admin | Send SMTP Email Alert to all Team Captains |
+| `GET` | `/api/v1/dashboard/stats` | Admin | Aggregate data for the Admin Overview |
+| `PUT` | `/api/v1/settings` | Super Admin | Toggle Registration & Update Global Banner |
+| `POST` | `/api/v1/settings/upload-...`| Super Admin | Direct Cloudinary upload for publicity |
+
+---
+
+## 👨‍💻 Developer Guidelines
+
+### 1. Project Architecture
+The project follows a **Controller-Service-Model** pattern:
+- **Routes**: Define endpoints and apply middleware.
+- **Controllers**: Handle HTTP concerns (req/res) and validation.
+- **Services**: Contain business logic (Standings calculation, Match scheduling).
+- **Models**: Mongoose schemas enforcing data integrity.
+
+### 2. Middleware Chain
+Most admin routes follow this protection chain:
+`verifyToken` (Authenticates) -> `restrictTo('admin', 'super_admin')` (Authorizes).
+
+### 3. Error Handling
+The API returns standardized JSON error responses:
+```json
+{
+  "success": false,
+  "message": "Reason for failure",
+  "statusCode": 401
+}
 ```
 
 ---
 
 ## 📄 License
-This project is private and intended for the Solid FM 5-Aside Football League.
+Private Repository — Intended for use by the **Solid FM 5-Aside Football League**.
