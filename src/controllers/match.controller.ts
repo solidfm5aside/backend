@@ -74,7 +74,7 @@ export const setWinner = async (req: Request, res: Response) => {
     }
 
     const match = await matchService.updateMatchWinner(
-      req.params.id,
+      req.params.id as string,
       winnerId,
       !!isExtraTime,
       shootoutScore

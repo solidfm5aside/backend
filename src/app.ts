@@ -16,6 +16,8 @@ import venueRoutes from '@/routes/venue.routes';
 import paymentRoutes from '@/routes/payment.routes';
 import dashboardRoutes from '@/routes/dashboard.routes';
 import settingRoutes from '@/routes/setting.routes';
+import broadcastRoutes from '@/routes/broadcast.routes';
+
 
 const app = express();
 
@@ -51,6 +53,8 @@ app.use('/api/v1/standings', standingsRoutes);
 app.use('/api/v1/payments', paymentRoutes);
 app.use('/api/v1/dashboard', dashboardRoutes);
 app.use('/api/v1/settings', settingRoutes);
+app.use('/api/v1/broadcast', broadcastRoutes);
+
 
 // Root route
 app.get('/', (req: Request, res: Response) => {

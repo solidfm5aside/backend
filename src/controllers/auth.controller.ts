@@ -183,7 +183,7 @@ export const resetPassword = async (req: Request, res: Response) => {
     const { token } = req.params;
     const { password } = resetPasswordSchema.parse(req.body);
 
-    const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+    const hashedToken = crypto.createHash('sha256').update(token as string).digest('hex');
 
     const admin = await Admin.findOne({
       passwordResetToken: hashedToken,
