@@ -1,5 +1,10 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
+import {
+  ADMIN_BOOTSTRAP_CLAIM,
+  ADMIN_BOOTSTRAP_INDEX,
+} from '@/utils/admin-bootstrap.util';
 
 export enum AdminRole {
   SUPER_ADMIN = 'super_admin',
@@ -18,6 +23,8 @@ export interface IAdmin extends Document {
   passwordChangedAt?: Date;
   passwordResetToken?: string;
   passwordResetExpires?: Date;
+  sessionVersion: number;
+  bootstrapClaim?: typeof ADMIN_BOOTSTRAP_CLAIM;
   comparePassword(password: string): Promise<boolean>;
   createPasswordResetToken(): string;
 }
@@ -63,17 +70,38 @@ const adminSchema = new Schema<IAdmin>(
     passwordChangedAt: Date,
     passwordResetToken: String,
     passwordResetExpires: Date,
+    sessionVersion: {
+      type: Number,
+      min: 0,
+      default: 0,
+    },
+    bootstrapClaim: {
+      type: String,
+      enum: [ADMIN_BOOTSTRAP_CLAIM],
+      immutable: true,
+      select: false,
+    },
   },
   {
     timestamps: true,
   }
 );
 
+adminSchema.index(
+  { bootstrapClaim: 1 },
+  {
+    unique: true,
+    name: ADMIN_BOOTSTRAP_INDEX,
+    partialFilterExpression: { bootstrapClaim: { $type: 'string' } },
+  }
+);
+adminSchema.index({ role: 1, isVerified: 1, isDeleted: 1 });
+
 // Method to create password reset token
 adminSchema.methods.createPasswordResetToken = function () {
-  const resetToken = require('crypto').randomBytes(32).toString('hex');
+  const resetToken = crypto.randomBytes(32).toString('hex');
 
-  this.passwordResetToken = require('crypto')
+  this.passwordResetToken = crypto
     .createHash('sha256')
     .update(resetToken)
     .digest('hex');

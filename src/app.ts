@@ -5,6 +5,12 @@ import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 import compression from 'compression';
 import logger from '@/utils/logger';
+import { getAllowedClientOrigins } from '@/utils/client-origin.util';
+import {
+  getErrorStack,
+  getErrorStatusCode,
+  getPublicErrorMessage,
+} from '@/utils/http-error.util';
 
 import authRoutes from '@/routes/auth.routes';
 import teamRoutes from '@/routes/team.routes';
@@ -20,15 +26,26 @@ import broadcastRoutes from '@/routes/broadcast.routes';
 
 
 const app = express();
+const allowedClientOrigins = getAllowedClientOrigins();
 
 // Middleware
 app.use(helmet());
 app.use(compression());
 app.use(cors({
-  origin: process.env.CLIENT_URL ? process.env.CLIENT_URL.split(',') : ['http://localhost:3000'],
+  origin: allowedClientOrigins,
   credentials: true
 }));
 app.use(express.json());
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const unsafeMethod = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method);
+  const origin = req.headers.origin;
+
+  if (unsafeMethod && origin && !allowedClientOrigins.includes(origin)) {
+    return res.status(403).json({ success: false, message: 'Request origin is not allowed' });
+  }
+
+  next();
+});
 app.use(morgan('combined', { stream: { write: (message: string) => logger.http(message.trim()) } }));
 
 // Rate limiting
@@ -71,20 +88,19 @@ app.get('/health', (req: Request, res: Response) => {
 });
 
 // Error handling
-app.use((err: any, req: Request, res: Response, next: any) => {
-  logger.error(err.stack);
+app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  const stack = getErrorStack(err);
+  logger.error(stack ?? err);
   
-  const statusCode = err.statusCode || 500;
-  const message = process.env.NODE_ENV === 'production' 
-    ? 'Internal Server Error' 
-    : err.message;
+  const statusCode = getErrorStatusCode(err);
+  const message = getPublicErrorMessage(err);
 
   res.status(statusCode).json({
     success: false,
-    message: err.message || 'An unexpected error occurred',
+    message,
     statusCode,
     timestamp: new Date().toISOString(),
-    stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    stack: process.env.NODE_ENV === 'development' ? stack : undefined
   });
 });
 

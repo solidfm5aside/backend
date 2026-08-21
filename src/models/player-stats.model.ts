@@ -4,6 +4,7 @@ export interface IPlayerStats extends Document {
   tournamentId: mongoose.Types.ObjectId;
   playerId: mongoose.Types.ObjectId;
   teamId: mongoose.Types.ObjectId;
+  revision: number;
   goals: number;
   assists: number;
   yellowCards: number;
@@ -28,6 +29,7 @@ const playerStatsSchema = new Schema<IPlayerStats>(
       ref: 'Team',
       required: true,
     },
+    revision: { type: Number, min: 0, default: 0, select: false },
     goals: { type: Number, default: 0 },
     assists: { type: Number, default: 0 },
     yellowCards: { type: Number, default: 0 },

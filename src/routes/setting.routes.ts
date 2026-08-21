@@ -1,22 +1,21 @@
 import { Router } from 'express';
-import multer from 'multer';
 import * as settingController from '@/controllers/setting.controller';
 import { protect, restrictTo } from '@/middleware/auth.middleware';
+import { uploadPublicityImage, uploadSponsorImage } from '@/middleware/image-upload.middleware';
 
 const router = Router();
-const upload = multer({ storage: multer.memoryStorage() });
 
 // Public route to get all settings key-values
 router.get('/', settingController.getSettings);
 
 // Protected routes (Admin only)
 router.use(protect);
-router.use(restrictTo('super_admin'));
+router.use(restrictTo('admin', 'super_admin'));
 
 router.put('/', settingController.updateSettings);
 
 // Protected route to upload images directly to cloudinary
-router.post('/upload-logo', upload.single('logo'), settingController.handleUploadSponsorLogo);
-router.post('/upload-publicity', upload.single('image'), settingController.handleUploadPublicityBanner);
+router.post('/upload-logo', uploadSponsorImage, settingController.handleUploadSponsorLogo);
+router.post('/upload-publicity', uploadPublicityImage, settingController.handleUploadPublicityBanner);
 
 export default router;

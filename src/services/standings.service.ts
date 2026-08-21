@@ -1,110 +1,112 @@
 import Standings from '@/models/standings.model';
 import PlayerStats from '@/models/player-stats.model';
 import Match from '@/models/match.model';
-import Tournament from '@/models/tournament.model';
+import Tournament, {
+  CompetitionWorkflowState,
+  TournamentFormat,
+} from '@/models/tournament.model';
+import TournamentEntry from '@/models/tournament-entry.model';
+import TournamentRosterEntry from '@/models/tournament-roster-entry.model';
 import logger from '@/utils/logger';
+import mongoose, { ClientSession, Types } from 'mongoose';
+import { buildLegacyTournamentStatsSnapshot } from '@/utils/legacy-stats.util';
+import {
+  applyCompletedCompetitionScorerIdentitySnapshots,
+  buildCompetitionIdentitySnapshotMap,
+  buildCompetitionPlayerIdentitySnapshotMap,
+  competitionReferenceId,
+} from '@/utils/completed-competition-identity.util';
+import {
+  calculateGroupedStandings,
+  recalculateCompetitionStandingsInSession,
+} from './competition.service';
+
+const tournamentStatusPriority = (status: string): number => {
+  if (status === 'ongoing') return 0;
+  if (status === 'completed') return 1;
+  return 2;
+};
+
+const compareActiveTournaments = (
+  left: { status: string; startDate: Date },
+  right: { status: string; startDate: Date }
+): number =>
+  tournamentStatusPriority(left.status) - tournamentStatusPriority(right.status) ||
+  right.startDate.getTime() - left.startDate.getTime();
 
 /**
  * Completely recalculates all stats for a tournament based on match data and events.
  * This effectively makes standings and player stats "Live" if live matches are included.
  */
-export const recalculateTournamentStats = async (tournamentId: string) => {
+const recalculateTournamentStatsInSession = async (
+  tournamentId: string,
+  session: ClientSession
+): Promise<void> => {
+  const tournament = await Tournament.findById(tournamentId)
+    .select('formatVersion format')
+    .session(session)
+    .lean();
+  if (
+    tournament?.formatVersion === 2 &&
+    tournament.format === TournamentFormat.TWO_GROUP_KNOCKOUT
+  ) {
+    await recalculateCompetitionStandingsInSession(tournamentId, session);
+    return;
+  }
+
+  const matches = await Match.find({
+    tournamentId,
+    isDeleted: false,
+  })
+    .session(session)
+    .lean();
+  const snapshot = buildLegacyTournamentStatsSnapshot(matches);
+  const tournamentObjectId = new Types.ObjectId(tournamentId);
+
+  // Replace both derived collections inside the caller's transaction. Match
+  // mutations and their derived rows therefore commit or roll back together.
+  await Standings.deleteMany({ tournamentId: tournamentObjectId }).session(session);
+  await PlayerStats.deleteMany({ tournamentId: tournamentObjectId }).session(session);
+  if (snapshot.standings.length > 0) {
+    await Standings.insertMany(
+      snapshot.standings.map((row) => ({
+        ...row,
+        tournamentId: tournamentObjectId,
+        teamId: new Types.ObjectId(row.teamId),
+      })),
+      { session, ordered: true }
+    );
+  }
+  if (snapshot.playerStats.length > 0) {
+    await PlayerStats.insertMany(
+      snapshot.playerStats.map((row) => ({
+        ...row,
+        tournamentId: tournamentObjectId,
+        playerId: new Types.ObjectId(row.playerId),
+        teamId: new Types.ObjectId(row.teamId),
+      })),
+      { session, ordered: true }
+    );
+  }
+};
+
+export const recalculateTournamentStats = async (
+  tournamentId: string,
+  existingSession?: ClientSession
+): Promise<void> => {
   try {
-    // 1. Fetch all matches that are not scheduled (i.e., live or completed)
-    const matches = await Match.find({ 
-      tournamentId, 
-      isDeleted: false,
-      status: { $in: ['live', 'completed'] } 
-    });
-
-    // 2. Clear existing team standings and player stats for this tournament or reset them
-    // We update them in a map and then save to ensure consistency
-    const teamStatsMap = new Map();
-    const playerStatsMap = new Map();
-
-    // Initialize all participating teams' standings to 0 (to handle teams that haven't played yet)
-    // We'll fetch teams later if needed, but for now we focus on teams that HAVE played/are playing
-    
-    for (const match of matches) {
-      const { homeTeam, awayTeam, homeScore, awayScore, events } = match;
-
-      // Update Team Stats
-      const updateTeam = (teamId: string, gf: number, ga: number) => {
-        const idStr = teamId.toString();
-        const stats = teamStatsMap.get(idStr) || { 
-          played: 0, won: 0, drawn: 0, lost: 0, 
-          goalsFor: 0, goalsAgainst: 0, points: 0 
-        };
-
-        stats.played += 1;
-        stats.goalsFor += gf;
-        stats.goalsAgainst += ga;
-        
-        if (gf > ga) { stats.won += 1; stats.points += 3; }
-        else if (gf === ga) { stats.drawn += 1; stats.points += 1; }
-        else { stats.lost += 1; }
-
-        teamStatsMap.set(idStr, stats);
-      };
-
-      updateTeam(homeTeam.toString(), homeScore, awayScore);
-      updateTeam(awayTeam.toString(), awayScore, homeScore);
-
-      // Update Player Stats from events
-      for (const event of events) {
-        if (!event.playerId) continue;
-        const pId = event.playerId.toString();
-        const pStats = playerStatsMap.get(pId) || { goals: 0, assists: 0, yellowCards: 0, redCards: 0, teamId: event.teamId.toString() };
-
-        if (event.type === 'goal') {
-          pStats.goals += 1;
-          
-          // Handle Assist
-          if (event.details?.includes('assist:') || (event as any).assistPlayerId) {
-             const aId = (event as any).assistPlayerId?.toString();
-             if (aId) {
-                const aStats = playerStatsMap.get(aId) || { goals: 0, assists: 0, yellowCards: 0, redCards: 0, teamId: event.teamId.toString() };
-                aStats.assists += 1;
-                playerStatsMap.set(aId, aStats);
-             }
-          }
-        } 
-        else if (event.type === 'yellow_card') pStats.yellowCards += 1;
-        else if (event.type === 'red_card') pStats.redCards += 1;
-
-        playerStatsMap.set(pId, pStats);
+    if (existingSession) {
+      await recalculateTournamentStatsInSession(tournamentId, existingSession);
+    } else {
+      const session = await mongoose.startSession();
+      try {
+        await session.withTransaction(async () => {
+          await recalculateTournamentStatsInSession(tournamentId, session);
+        });
+      } finally {
+        await session.endSession();
       }
     }
-
-
-    // 3. Batch Update Standings
-    for (const [teamId, stats] of teamStatsMap.entries()) {
-      await Standings.findOneAndUpdate(
-        { tournamentId, teamId },
-        { 
-          ...stats,
-          goalDifference: stats.goalsFor - stats.goalsAgainst
-        },
-        { upsert: true }
-      );
-    }
-
-    // 4. Batch Update PlayerStats
-    for (const [playerId, stats] of playerStatsMap.entries()) {
-      await PlayerStats.findOneAndUpdate(
-        { tournamentId, playerId },
-        { 
-          goals: stats.goals,
-          assists: stats.assists,
-          yellowCards: stats.yellowCards,
-          redCards: stats.redCards,
-          teamId: stats.teamId
-        },
-        { upsert: true }
-      );
-    }
-
-
     logger.info(`Recalculated stats for tournament ${tournamentId}`);
   } catch (error) {
     logger.error(`Error recalculating stats for tournament ${tournamentId}:`, error);
@@ -113,22 +115,70 @@ export const recalculateTournamentStats = async (tournamentId: string) => {
 };
 
 export const getTournamentStandings = async (tournamentId: string) => {
+  const tournament = await Tournament.findById(tournamentId).select('formatVersion format').lean();
+  if (
+    tournament?.formatVersion === 2 &&
+    tournament.format === TournamentFormat.TWO_GROUP_KNOCKOUT
+  ) {
+    const groups = await calculateGroupedStandings(tournamentId);
+    return [...groups.A, ...groups.B];
+  }
   return await Standings.find({ tournamentId })
     .populate('teamId', 'name logo')
     .sort({ points: -1, goalDifference: -1, goalsFor: -1 });
 };
 
 export const getTopScorers = async (tournamentId: string) => {
-  return await PlayerStats.find({ tournamentId })
-    .populate('playerId', 'name')
-    .populate('teamId', 'name logo')
+  const tournament = await Tournament.findById(tournamentId)
+    .select('formatVersion format workflowState')
+    .lean();
+  const completedV2 = Boolean(
+    tournament?.formatVersion === 2 &&
+      tournament.format === TournamentFormat.TWO_GROUP_KNOCKOUT &&
+      tournament.workflowState === CompetitionWorkflowState.COMPLETED
+  );
+  const statsQuery = PlayerStats.find({ tournamentId })
     .sort({ goals: -1, assists: -1 })
     .limit(10);
+  if (!completedV2) {
+    return await statsQuery
+      .populate('playerId', 'name')
+      .populate('teamId', 'name logo');
+  }
+
+  const scorers = await statsQuery.lean();
+  const playerIds = scorers
+    .map((scorer) => competitionReferenceId(scorer.playerId))
+    .filter((id): id is string => Boolean(id));
+  const teamIds = scorers
+    .map((scorer) => competitionReferenceId(scorer.teamId))
+    .filter((id): id is string => Boolean(id));
+  const [playerSnapshots, teamSnapshots] = await Promise.all([
+    TournamentRosterEntry.find({
+      tournamentId,
+      playerId: { $in: playerIds },
+    })
+      .select('tournamentId playerId playerNameSnapshot')
+      .lean(),
+    TournamentEntry.find({
+      tournamentId,
+      teamId: { $in: teamIds },
+      isDeleted: false,
+    })
+      .select('tournamentId teamId teamNameSnapshot teamLogoSnapshot')
+      .lean(),
+  ]);
+  return applyCompletedCompetitionScorerIdentitySnapshots(
+    scorers,
+    new Set([tournamentId]),
+    buildCompetitionIdentitySnapshotMap(teamSnapshots),
+    buildCompetitionPlayerIdentitySnapshotMap(playerSnapshots)
+  );
 };
 
 export const getGlobalTournamentStandings = async () => {
-  const tournaments = await Tournament.find({ isDeleted: false, status: { $ne: 'scheduled' } })
-    .sort({ createdAt: -1 });
+  const tournaments = await Tournament.find({ isDeleted: false });
+  tournaments.sort(compareActiveTournaments);
 
   const result = [];
   for (const t of tournaments) {
@@ -142,8 +192,9 @@ export const getGlobalTournamentStandings = async () => {
 };
 
 export const getGlobalTopScorers = async () => {
-  const tournament = await Tournament.findOne({ isDeleted: false, status: { $ne: 'scheduled' } })
-    .sort({ createdAt: -1 });
+  const tournaments = await Tournament.find({ isDeleted: false });
+  tournaments.sort(compareActiveTournaments);
+  const tournament = tournaments[0];
 
   if (!tournament) return [];
   return await getTopScorers(tournament._id.toString());

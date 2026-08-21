@@ -9,7 +9,7 @@ interface BaseTemplateOptions {
   footer?: string;
 }
 
-const getBaseTemplate = ({ title, previewText, content, footer }: BaseTemplateOptions) => {
+const getBaseTemplate = ({ title, content, footer }: BaseTemplateOptions) => {
   return `
 <!DOCTYPE html>
 <html>

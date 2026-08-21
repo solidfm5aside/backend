@@ -1,13 +1,14 @@
-import { Request, Response } from 'express';
+import { Response } from 'express';
 import Team from '@/models/team.model';
 import Match from '@/models/match.model';
 import Player from '@/models/player.model';
 import Admin from '@/models/admin.model';
 import logger from '@/utils/logger';
+import type { AuthRequest } from '@/middleware/auth.middleware';
 
-export const getDashboardStats = async (req: Request, res: Response) => {
+export const getDashboardStats = async (req: AuthRequest, res: Response) => {
   try {
-    const user = (req as any).user;
+    const user = req.user;
     if (!user) {
       return res.status(401).json({ success: false, message: 'User not authenticated' });
     }
@@ -43,7 +44,7 @@ export const getDashboardStats = async (req: Request, res: Response) => {
         pendingAdmins: isSuperAdmin ? pendingAdmins : undefined
       }
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     logger.error('Dashboard Stats Error:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch dashboard stats' });
   }

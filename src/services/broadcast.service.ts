@@ -6,10 +6,12 @@ import logger from '@/utils/logger';
 /**
  * Service to handle tournament-wide broadcasts
  */
-export const sendBroadcast = async (message: string, subject: string = 'Tournament Update - CodeJude Football') => {
+export const sendBroadcast = async (message: string, subject: string = 'Tournament Update - SolidFM 5-Aside') => {
   try {
-    // Fetch ALL teams regardless of status (Pending/Registered/Withdrawn)
-    const teams = await Team.find({ isDeleted: false }, 'contactEmail name captainName');
+    const teams = await Team.find(
+      { isDeleted: false, registrationStatus: 'registered' },
+      'contactEmail name captainName'
+    );
     
     // Extract unique emails
     const recipientEmails = Array.from(new Set(
@@ -26,7 +28,7 @@ export const sendBroadcast = async (message: string, subject: string = 'Tourname
 
     // We send to recipients as BCC for privacy
     const html = getBroadcastTemplate(subject, message);
-    await sendEmail(recipientEmails, subject, message, html);
+    await sendEmail(recipientEmails, subject, message, html, { blindCopy: true });
 
     return {
        recipientCount: recipientEmails.length,

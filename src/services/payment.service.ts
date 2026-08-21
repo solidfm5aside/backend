@@ -1,9 +1,20 @@
-import Payment from '@/models/payment.model';
+import Payment, { PaymentStatus } from '@/models/payment.model';
 import Team from '@/models/team.model';
 import logger from '@/utils/logger';
 import mongoose from 'mongoose';
 
-export const recordPayment = async (paymentData: any) => {
+type PaymentData = {
+  amount: number;
+  date?: Date;
+  isDeleted?: boolean;
+  receiptUrl?: string;
+  reference?: string;
+  status?: PaymentStatus;
+  teamId: mongoose.Types.ObjectId | string;
+  tournamentId: mongoose.Types.ObjectId | string;
+};
+
+export const recordPayment = async (paymentData: PaymentData) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
@@ -11,7 +22,7 @@ export const recordPayment = async (paymentData: any) => {
     const payment = await Payment.create([paymentData], { session });
 
     // If payment is completed, update team registration status
-    if (paymentData.status === 'completed') {
+    if (paymentData.status === PaymentStatus.COMPLETED) {
       await Team.findByIdAndUpdate(
         paymentData.teamId,
         { registrationStatus: 'registered' },
@@ -31,7 +42,7 @@ export const recordPayment = async (paymentData: any) => {
   }
 };
 
-export const getPayments = async (filter: any = {}) => {
+export const getPayments = async (filter: Record<string, unknown> = {}) => {
   return await Payment.find(filter)
     .populate('teamId', 'name')
     .populate('tournamentId', 'name season')

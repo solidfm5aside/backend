@@ -1,12 +1,14 @@
 import { Request, Response } from 'express';
 import { Setting } from '@/models/setting.model';
+import { uploadPublicityBanner, uploadSponsorLogo } from '@/utils/cloudinary';
+import { getErrorMessage } from '@/utils/http-error.util';
 
 export const getSettings = async (req: Request, res: Response) => {
   try {
     const settings = await Setting.find({});
     
     // Convert array of settings into a key-value object map
-    const settingsMap = settings.reduce((acc: any, setting) => {
+    const settingsMap = settings.reduce<Record<string, unknown>>((acc, setting) => {
       acc[setting.key] = setting.value;
       return acc;
     }, {});
@@ -15,8 +17,11 @@ export const getSettings = async (req: Request, res: Response) => {
       success: true,
       data: settingsMap
     });
-  } catch (error: any) {
-    res.status(500).json({ success: false, message: error.message });
+  } catch (error: unknown) {
+    res.status(500).json({
+      success: false,
+      message: getErrorMessage(error, 'Failed to fetch settings'),
+    });
   }
 };
 
@@ -45,12 +50,13 @@ export const updateSettings = async (req: Request, res: Response) => {
       message: 'Settings updated successfully',
       data: updatedSettings
     });
-  } catch (error: any) {
-    res.status(400).json({ success: false, message: error.message });
+  } catch (error: unknown) {
+    res.status(400).json({
+      success: false,
+      message: getErrorMessage(error, 'Failed to update settings'),
+    });
   }
 };
-
-import { uploadSponsorLogo, uploadPublicityBanner } from '@/utils/cloudinary';
 
 export const handleUploadSponsorLogo = async (req: Request, res: Response) => {
   try {
@@ -58,15 +64,18 @@ export const handleUploadSponsorLogo = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: 'No image file provided' });
     }
 
-    const logoUrl = await uploadSponsorLogo(req.file.buffer);
+    const uploadedLogo = await uploadSponsorLogo(req.file.buffer);
 
     res.status(200).json({
       success: true,
       message: 'Sponsor logo uploaded successfully',
-      data: { url: logoUrl }
+      data: { url: uploadedLogo.url }
     });
-  } catch (error: any) {
-    res.status(500).json({ success: false, message: error.message });
+  } catch (error: unknown) {
+    res.status(500).json({
+      success: false,
+      message: getErrorMessage(error, 'Failed to upload sponsor logo'),
+    });
   }
 };
 
@@ -76,14 +85,17 @@ export const handleUploadPublicityBanner = async (req: Request, res: Response) =
       return res.status(400).json({ success: false, message: 'No image file provided' });
     }
 
-    const bannerUrl = await uploadPublicityBanner(req.file.buffer);
+    const uploadedBanner = await uploadPublicityBanner(req.file.buffer);
 
     res.status(200).json({
       success: true,
       message: 'Publicity banner uploaded successfully',
-      data: { url: bannerUrl }
+      data: { url: uploadedBanner.url }
     });
-  } catch (error: any) {
-    res.status(500).json({ success: false, message: error.message });
+  } catch (error: unknown) {
+    res.status(500).json({
+      success: false,
+      message: getErrorMessage(error, 'Failed to upload publicity banner'),
+    });
   }
 };

@@ -2,6 +2,8 @@ import { Request, Response, NextFunction } from 'express';
 import { ZodSchema, ZodError } from 'zod';
 import logger from '@/utils/logger';
 
+const OBJECT_ID_PATTERN = /^[0-9a-fA-F]{24}$/;
+
 export const validate = (schema: ZodSchema) => {
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -13,7 +15,7 @@ export const validate = (schema: ZodSchema) => {
         return res.status(400).json({
           success: false,
           error: 'Validation Error',
-          message: error.issues.map((e: any) => e.message).join(', '),
+          message: error.issues.map((issue) => issue.message).join(', '),
           details: error.issues,
           statusCode: 400,
           timestamp: new Date().toISOString(),
@@ -27,5 +29,20 @@ export const validate = (schema: ZodSchema) => {
         timestamp: new Date().toISOString(),
       });
     }
+  };
+};
+
+export const validateObjectIdParam = (paramName = 'id', label = 'resource') => {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const value = req.params[paramName];
+
+    if (typeof value !== 'string' || !OBJECT_ID_PATTERN.test(value)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid ${label} ID`,
+      });
+    }
+
+    next();
   };
 };

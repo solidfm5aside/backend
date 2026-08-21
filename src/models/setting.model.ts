@@ -2,7 +2,7 @@ import mongoose, { Document, Schema } from 'mongoose';
 
 export interface ISetting extends Document {
   key: string;
-  value: any;
+  value: unknown;
   description?: string;
 }
 

@@ -11,11 +11,19 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-export const sendEmail = async (to: string[], subject: string, text: string, html?: string) => {
+export const sendEmail = async (
+  to: string[],
+  subject: string,
+  text: string,
+  html?: string,
+  options: { blindCopy?: boolean } = {}
+) => {
   try {
+    const fromAddress = `"${process.env.SMTP_FROM_NAME || 'SolidFM 5-Aside'}" <${process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER}>`;
     const info = await transporter.sendMail({
-      from: `"${process.env.SMTP_FROM_NAME || 'CodeJude Football'}" <${process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER}>`,
-      to: to.join(', '),
+      from: fromAddress,
+      to: options.blindCopy ? fromAddress : to.join(', '),
+      bcc: options.blindCopy ? to.join(', ') : undefined,
       subject,
       text,
       html: html || text.replace(/\n/g, '<br>'),

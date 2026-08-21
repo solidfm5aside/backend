@@ -1,14 +1,18 @@
 import { Server as HttpServer } from 'http';
 import { Server } from 'socket.io';
 import logger from '@/utils/logger';
+import { getAllowedClientOrigins } from '@/utils/client-origin.util';
 
 export let io: Server;
 
 export const initSocket = (server: HttpServer) => {
+  const allowedOrigins = getAllowedClientOrigins();
+
   io = new Server(server, {
     cors: {
-      origin: process.env.CLIENT_URL || 'http://localhost:3000',
-      methods: ['GET', 'POST']
+      origin: allowedOrigins,
+      methods: ['GET', 'POST'],
+      credentials: true,
     }
   });
 
@@ -45,15 +49,19 @@ export const initSocket = (server: HttpServer) => {
   return io;
 };
 
-export const broadcastMatchUpdate = (matchId: string, data: any) => {
+export const broadcastMatchUpdate = (matchId: string, data: unknown) => {
   if (io) {
     io.of('/public').to(`match:${matchId}`).emit('match:updated', data);
     io.of('/public').emit('match:list:updated', data); // For general list updates
   }
 };
 
-export const broadcastGoal = (matchId: string, goalData: any) => {
+export const broadcastGoal = (
+  matchId: string,
+  goalData: Record<string, unknown> & { match?: unknown }
+) => {
   if (io) {
     io.of('/public').to(`match:${matchId}`).emit('goal:scored', goalData);
+    io.of('/public').emit('match:list:updated', goalData.match);
   }
 };

@@ -11,6 +11,7 @@ export interface ITeam extends Document {
   contactPhone: string;
   contactEmail: string;
   registrationStatus: 'pending' | 'registered' | 'withdrawn';
+  lifecycleRevision: number;
   isDeleted: boolean;
 }
 
@@ -19,7 +20,6 @@ const teamSchema = new Schema<ITeam>(
     name: {
       type: String,
       required: [true, 'Team name is required'],
-      unique: true,
       trim: true,
       minlength: [3, 'Team name must be at least 3 characters'],
     },
@@ -59,10 +59,26 @@ const teamSchema = new Schema<ITeam>(
       enum: ['pending', 'registered', 'withdrawn'],
       default: 'pending',
     },
+    lifecycleRevision: {
+      type: Number,
+      min: 0,
+      default: 0,
+      select: false,
+    },
     isDeleted: { type: Boolean, default: false },
   },
   {
     timestamps: true,
+  }
+);
+
+teamSchema.index(
+  { name: 1 },
+  {
+    unique: true,
+    name: 'one_active_team_name_case_insensitive',
+    partialFilterExpression: { isDeleted: false },
+    collation: { locale: 'en', strength: 2 },
   }
 );
 

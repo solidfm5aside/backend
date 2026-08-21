@@ -4,6 +4,7 @@ import {
   getTournamentStandings as getTournamentStandingsService 
 } from '../services/standings.service';
 import logger from '@/utils/logger';
+import { getErrorMessage } from '@/utils/http-error.util';
 
 export const getTopScorers = async (req: Request, res: Response) => {
   try {
@@ -14,11 +15,11 @@ export const getTopScorers = async (req: Request, res: Response) => {
       success: true,
       data: scorers
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     logger.error('Error fetching top scorers:', error);
     res.status(500).json({
       success: false,
-      message: error.message || 'Failed to fetch top scorers'
+      message: getErrorMessage(error, 'Failed to fetch top scorers')
     });
   }
 };
@@ -32,11 +33,11 @@ export const getStandings = async (req: Request, res: Response) => {
       success: true,
       data: standings
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     logger.error('Error fetching standings:', error);
     res.status(500).json({
       success: false,
-      message: error.message || 'Failed to fetch standings'
+      message: getErrorMessage(error, 'Failed to fetch standings')
     });
   }
 };
