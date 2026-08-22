@@ -175,13 +175,15 @@ one explicitly supplied tournament ID:
 npm run db:official-2026:plan -- --tournament-id=<exact-tournament-object-id>
 ```
 
-The plan pins the source DOCX by SHA-256, verifies the exact 14 registered team
-identities, maps Pot 1 to Group A and Pot 2 to Group B, and maps the three
-existing venue records to `Eclipse Arena`, `Wembley Hotel`, and `Tribu Arena`.
-It accepts only the documented exact aliases; it does not fuzzy-match names.
-The official manifest contains 42 unique group matches: 41 confirmed dated
-fixtures and the Samba Boys–NYSC opener left pending because the source does
-not state its kickoff or venue.
+The plan pins the source DOCX and the separately supplied opener artwork by
+SHA-256, verifies the exact 14 registered team identities, maps Pot 1 to Group
+A and Pot 2 to Group B, and maps the three existing venue records to `Eclipse
+Arena`, `Wembley Hotel`, and `Tribu Arena`. It accepts only the documented
+exact aliases; it does not fuzzy-match names. The official manifest contains
+42 unique, confirmed group matches. Fixture 1 is Samba Boys–NYSC at 3:00 PM
+`Africa/Lagos` on 23 August 2026 at `Tribu Arena`; its time is supported by the
+pinned artwork, while its date and venue are recorded from the competition
+owner's explicit confirmation. Fixtures 2–42 retain the DOCX table schedule.
 
 Execution is refused unless all 42 legacy generated fixtures and all 14 legacy
 standings remain untouched. Any live/completed match, score, event, winner,
@@ -285,8 +287,8 @@ The group preview and publish bodies use the same official manifest:
       "groupKey": "A",
       "homeEntryId": "<TournamentEntry ObjectId>",
       "awayEntryId": "<TournamentEntry ObjectId>",
-      "kickoffAt": null,
-      "venue": null
+      "kickoffAt": "2026-08-23T14:00:00.000Z",
+      "venue": "Tribu Arena"
     }
   ]
 }

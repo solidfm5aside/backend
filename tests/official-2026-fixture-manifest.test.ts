@@ -1,9 +1,13 @@
+import { createHash } from "node:crypto";
+
 import {
   assertOfficial2026FixtureManifestIntegrity,
   getOfficial2026TeamDefinition,
   normalizeOfficial2026Name,
   OFFICIAL_2026_FIXTURE_PUBLICATION_HASH,
+  OFFICIAL_2026_FIXTURE_SOURCE_REFERENCE,
   OFFICIAL_2026_FIXTURES,
+  OFFICIAL_2026_OPENER_SUPPLEMENT,
   OFFICIAL_2026_SOURCE_BYTE_LENGTH,
   OFFICIAL_2026_SOURCE_SHA256,
   OFFICIAL_2026_TEAMS,
@@ -131,32 +135,33 @@ describe("official 2026 physical fixture manifest", () => {
     expect([...teamCounts.values()]).toEqual(Array(14).fill(6));
   });
 
-  it("preserves the one pending opener and all 41 confirmed document rows", () => {
-    const pending = OFFICIAL_2026_FIXTURES.filter(
-      (fixture) => fixture.scheduleStatus === "pending",
-    );
-    const confirmed = OFFICIAL_2026_FIXTURES.filter(
-      (fixture) => fixture.scheduleStatus === "confirmed",
-    );
+  it("places the separately confirmed opener first and keeps all 42 schedules confirmed", () => {
+    const confirmed = OFFICIAL_2026_FIXTURES;
 
-    expect(pending).toEqual([
-      expect.objectContaining({
-        officialNumber: 1,
-        homeTeamKey: "samba-boys",
-        awayTeamKey: "nysc-fc",
-        sourceAwayName: "NYSC",
-        kickoffAt: null,
-        venueName: null,
-      }),
-    ]);
-    expect(confirmed).toHaveLength(41);
+    expect(
+      OFFICIAL_2026_FIXTURES.every(
+        (fixture) => fixture.scheduleStatus === "confirmed",
+      ),
+    ).toBe(true);
+    expect(confirmed).toHaveLength(42);
     expect(
       confirmed.every((fixture) => fixture.kickoffAt && fixture.venueName),
     ).toBe(true);
     expect(
       OFFICIAL_2026_FIXTURES.map((fixture) => fixture.officialNumber),
     ).toEqual(Array.from({ length: 42 }, (_, index) => index + 1));
-    expect(confirmed[0]).toEqual(
+    expect(OFFICIAL_2026_FIXTURES[0]).toEqual(
+      expect.objectContaining({
+        officialNumber: 1,
+        homeTeamKey: "samba-boys",
+        awayTeamKey: "nysc-fc",
+        sourceAwayName: "NYSC",
+        kickoffAt: "2026-08-23T14:00:00.000Z",
+        venueName: "Tribu Arena",
+        scheduleStatus: "confirmed",
+      }),
+    );
+    expect(confirmed[1]).toEqual(
       expect.objectContaining({
         officialNumber: 2,
         kickoffAt: "2026-08-29T13:00:00.000Z",
@@ -194,17 +199,48 @@ describe("official 2026 physical fixture manifest", () => {
     expect(assertOfficial2026FixtureManifestIntegrity()).toEqual(
       expect.objectContaining({
         fixtureCount: 42,
-        confirmedFixtureCount: 41,
-        pendingFixtureCount: 1,
+        confirmedFixtureCount: 42,
+        pendingFixtureCount: 0,
         fixturesPerGroup: { A: 21, B: 21 },
       }),
     );
     expect(OFFICIAL_2026_FIXTURE_PUBLICATION_HASH).toBe(
-      "b13e351d03dc3fe1c9c07423f4ce6feb55920f91844a74af7987989959ba47e3",
+      "bd30f96f5a5746f5df6ebb03cc8a3f9393bbc7e4712cfc535703bf2257890583",
     );
     expect(OFFICIAL_2026_SOURCE_SHA256).toBe(
       "50f202333794db274eea0223ac83c26aca0676ec3ccd2fd4b9ceabfe7039b117",
     );
     expect(OFFICIAL_2026_SOURCE_BYTE_LENGTH).toBe(65_713);
+    expect(OFFICIAL_2026_OPENER_SUPPLEMENT).toEqual({
+      sourceTitle: "WhatsApp Image 2026-08-22 at 7.10.30 PM.jpeg",
+      sourceSha256:
+        "2aa35e968a6147639da44d83c1535263d2a445a48b9264c282ddea2a8fa431db",
+      sourceByteLength: 26_158,
+      evidenceScope: "fixture-1-pairing-and-15:00-local-kickoff",
+      confirmedLocalDate: "2026-08-23",
+      confirmedLocalKickoffTime: "15:00",
+      confirmedVenueName: "Tribu Arena",
+      dateAndVenueAuthority: "user-confirmed-2026-08-22",
+    });
+    expect(OFFICIAL_2026_FIXTURE_SOURCE_REFERENCE).toContain(
+      `docx-sha256:${OFFICIAL_2026_SOURCE_SHA256}`,
+    );
+    expect(OFFICIAL_2026_FIXTURE_SOURCE_REFERENCE).toContain(
+      `opener-image-sha256:${OFFICIAL_2026_OPENER_SUPPLEMENT.sourceSha256}`,
+    );
+    expect(OFFICIAL_2026_FIXTURE_SOURCE_REFERENCE).toContain(
+      "schedule-owner-confirmed:2026-08-22",
+    );
+    expect(OFFICIAL_2026_FIXTURE_SOURCE_REFERENCE.length).toBeLessThanOrEqual(
+      200,
+    );
+
+    expect(
+      createHash("sha256")
+        .update(JSON.stringify(OFFICIAL_2026_FIXTURES.slice(1)))
+        .digest("hex"),
+    ).toBe(
+      "0de0737e84b5a2d08f1456e5abc85e7aa23d727e7768274528926ff478f1fbed",
+    );
   });
 });

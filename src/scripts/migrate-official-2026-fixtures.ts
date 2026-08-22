@@ -5,7 +5,9 @@ import {
   assertOfficial2026FixtureManifestIntegrity,
   normalizeOfficial2026Name,
   OFFICIAL_2026_FIXTURE_PUBLICATION_HASH,
+  OFFICIAL_2026_FIXTURE_SOURCE_REFERENCE,
   OFFICIAL_2026_FIXTURES,
+  OFFICIAL_2026_OPENER_SUPPLEMENT,
   OFFICIAL_2026_SOURCE_BYTE_LENGTH,
   OFFICIAL_2026_SOURCE_SHA256,
   OFFICIAL_2026_TEAMS,
@@ -840,7 +842,7 @@ const applyMigration = async (
         officialFixtureNumber: fixture.officialNumber,
         fixtureSource: MatchFixtureSource.PHYSICAL_OFFICIAL,
         fixturePublicationHash: OFFICIAL_2026_FIXTURE_PUBLICATION_HASH,
-        fixtureSourceReference: `docx-sha256:${OFFICIAL_2026_SOURCE_SHA256}`,
+        fixtureSourceReference: OFFICIAL_2026_FIXTURE_SOURCE_REFERENCE,
         fixturePublishedAt: migratedAt,
         ...(fixture.kickoffAt ? { date: new Date(fixture.kickoffAt) } : {}),
         ...(fixture.venueName ? { venue: fixture.venueName } : {}),
@@ -870,7 +872,7 @@ const applyMigration = async (
       {
         tournamentId,
         operation: MIGRATION_OPERATION,
-        idempotencyKey: `v1:${OFFICIAL_2026_SOURCE_SHA256}`,
+        idempotencyKey: `v2:${OFFICIAL_2026_FIXTURE_PUBLICATION_HASH}`,
         requestHash: OFFICIAL_2026_FIXTURE_PUBLICATION_HASH,
         status: CompetitionOperationStatus.COMPLETED,
         result: publicationPlan.auditResult,
@@ -897,6 +899,9 @@ const printPlan = (
     `Pinned source: sha256=${OFFICIAL_2026_SOURCE_SHA256}, bytes=${OFFICIAL_2026_SOURCE_BYTE_LENGTH}`,
   );
   console.log(
+    `Pinned opener supplement: sha256=${OFFICIAL_2026_OPENER_SUPPLEMENT.sourceSha256}, bytes=${OFFICIAL_2026_OPENER_SUPPLEMENT.sourceByteLength}`,
+  );
+  console.log(
     `Fixture publication hash: ${OFFICIAL_2026_FIXTURE_PUBLICATION_HASH}`,
   );
   console.table(
@@ -918,7 +923,7 @@ const printPlan = (
     }),
   );
   console.log(
-    `Plan verified: replace 42 untouched legacy fixtures and 14 zero standings; create 14 entries, ${inspection.rosterPlayerCount} roster snapshots, 14 zero group standings, and 42 physical official fixtures (41 confirmed, 1 pending).`,
+    `Plan verified: replace 42 untouched legacy fixtures and 14 zero standings; create 14 entries, ${inspection.rosterPlayerCount} roster snapshots, 14 zero group standings, and 42 confirmed physical official fixtures.`,
   );
 };
 
@@ -979,6 +984,7 @@ const verifyCommittedMigration = async (
   }).lean()) as unknown as
     | {
         result?: {
+          migrationVersion?: number;
           migratedAt?: Date | string;
           tournamentStatus?: TournamentStatus;
           backupReference?: Official2026SafeBackupReference;
@@ -986,6 +992,16 @@ const verifyCommittedMigration = async (
           confirmedFixtureCount?: number;
           pendingFixtureCount?: number;
           sourceSha256?: string;
+          openerSupplement?: {
+            sourceTitle?: string;
+            sourceSha256?: string;
+            sourceByteLength?: number;
+            evidenceScope?: string;
+            confirmedLocalDate?: string;
+            confirmedLocalKickoffTime?: string;
+            confirmedVenueName?: string;
+            dateAndVenueAuthority?: string;
+          };
           fixturePublicationHash?: string;
         };
       }
@@ -998,11 +1014,28 @@ const verifyCommittedMigration = async (
     operationCount !== 1 ||
     !marker ||
     Number.isNaN(markerMigratedAt.getTime()) ||
+    marker.result?.migrationVersion !== 2 ||
     marker.result?.tournamentStatus !== expectedTournamentStatus ||
     marker.result?.fixtureCount !== 42 ||
-    marker.result?.confirmedFixtureCount !== 41 ||
-    marker.result?.pendingFixtureCount !== 1 ||
+    marker.result?.confirmedFixtureCount !== 42 ||
+    marker.result?.pendingFixtureCount !== 0 ||
     marker.result?.sourceSha256 !== OFFICIAL_2026_SOURCE_SHA256 ||
+    marker.result?.openerSupplement?.sourceTitle !==
+      OFFICIAL_2026_OPENER_SUPPLEMENT.sourceTitle ||
+    marker.result?.openerSupplement?.sourceSha256 !==
+      OFFICIAL_2026_OPENER_SUPPLEMENT.sourceSha256 ||
+    marker.result?.openerSupplement?.sourceByteLength !==
+      OFFICIAL_2026_OPENER_SUPPLEMENT.sourceByteLength ||
+    marker.result?.openerSupplement?.evidenceScope !==
+      OFFICIAL_2026_OPENER_SUPPLEMENT.evidenceScope ||
+    marker.result?.openerSupplement?.confirmedLocalDate !==
+      OFFICIAL_2026_OPENER_SUPPLEMENT.confirmedLocalDate ||
+    marker.result?.openerSupplement?.confirmedLocalKickoffTime !==
+      OFFICIAL_2026_OPENER_SUPPLEMENT.confirmedLocalKickoffTime ||
+    marker.result?.openerSupplement?.confirmedVenueName !==
+      OFFICIAL_2026_OPENER_SUPPLEMENT.confirmedVenueName ||
+    marker.result?.openerSupplement?.dateAndVenueAuthority !==
+      OFFICIAL_2026_OPENER_SUPPLEMENT.dateAndVenueAuthority ||
     marker.result?.fixturePublicationHash !==
       OFFICIAL_2026_FIXTURE_PUBLICATION_HASH ||
     marker.result?.backupReference?.basename !==

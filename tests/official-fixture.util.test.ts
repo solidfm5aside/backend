@@ -54,7 +54,7 @@ const expectPlanError = (
 };
 
 describe('official physical group fixture plan integrity', () => {
-  it('normalizes exactly 42 complete pairings while preserving a pending opener', () => {
+  it('normalizes exactly 42 complete pairings while preserving an allowed pending row', () => {
     const plan = buildOfficialGroupFixturePlanCore(
       tournamentId,
       buildCompletePlan().reverse(),

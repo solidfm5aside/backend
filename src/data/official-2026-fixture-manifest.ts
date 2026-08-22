@@ -7,6 +7,26 @@ export const OFFICIAL_2026_SOURCE_SHA256 =
 export const OFFICIAL_2026_SOURCE_BYTE_LENGTH = 65_713 as const;
 export const OFFICIAL_2026_TIME_ZONE = "Africa/Lagos" as const;
 
+/**
+ * Fixture 1 was listed without a schedule in the DOCX. The supplied match
+ * artwork independently identifies Samba Boys vs NYSC at 3:00 PM; the
+ * competition owner explicitly confirmed 2026-08-23 and Tribu Arena.
+ */
+export const OFFICIAL_2026_OPENER_SUPPLEMENT = {
+  sourceTitle: "WhatsApp Image 2026-08-22 at 7.10.30 PM.jpeg",
+  sourceSha256:
+    "2aa35e968a6147639da44d83c1535263d2a445a48b9264c282ddea2a8fa431db",
+  sourceByteLength: 26_158,
+  evidenceScope: "fixture-1-pairing-and-15:00-local-kickoff",
+  confirmedLocalDate: "2026-08-23",
+  confirmedLocalKickoffTime: "15:00",
+  confirmedVenueName: "Tribu Arena",
+  dateAndVenueAuthority: "user-confirmed-2026-08-22",
+} as const;
+
+export const OFFICIAL_2026_FIXTURE_SOURCE_REFERENCE =
+  `docx-sha256:${OFFICIAL_2026_SOURCE_SHA256};opener-image-sha256:${OFFICIAL_2026_OPENER_SUPPLEMENT.sourceSha256};schedule-owner-confirmed:2026-08-22` as const;
+
 export type Official2026GroupKey = "A" | "B";
 export type Official2026SourcePot = "Pot 1" | "Pot 2";
 export type Official2026ScheduleStatus = "confirmed" | "pending";
@@ -188,9 +208,10 @@ export interface Official2026Fixture {
 }
 
 /**
- * Kickoffs are exact instants converted from the DOCX's local Nigeria times.
- * Africa/Lagos is UTC+01:00 throughout these 2026 dates. Fixture 1 is the
- * prose-only opener; the source supplies no authoritative kickoff or venue.
+ * Kickoffs are exact instants converted from local Nigeria times. Africa/Lagos
+ * is UTC+01:00 throughout these 2026 dates. Fixture 1's schedule is the
+ * separately confirmed supplement described above; fixtures 2-42 retain the
+ * exact DOCX table order and schedule.
  */
 export const OFFICIAL_2026_FIXTURES = [
   {
@@ -201,9 +222,9 @@ export const OFFICIAL_2026_FIXTURES = [
     awayTeamKey: "nysc-fc",
     sourceHomeName: "Samba Boys",
     sourceAwayName: "NYSC",
-    kickoffAt: null,
-    venueName: null,
-    scheduleStatus: "pending",
+    kickoffAt: "2026-08-23T14:00:00.000Z",
+    venueName: "Tribu Arena",
+    scheduleStatus: "confirmed",
   },
   {
     officialNumber: 2,
@@ -735,6 +756,7 @@ const publicationPayload = {
   sourceSha256: OFFICIAL_2026_SOURCE_SHA256,
   sourceByteLength: OFFICIAL_2026_SOURCE_BYTE_LENGTH,
   timeZone: OFFICIAL_2026_TIME_ZONE,
+  openerSupplement: OFFICIAL_2026_OPENER_SUPPLEMENT,
   teams: OFFICIAL_2026_TEAMS,
   venues: OFFICIAL_2026_VENUES,
   fixtures: OFFICIAL_2026_FIXTURES,
@@ -942,19 +964,21 @@ export const assertOfficial2026FixtureManifestIntegrity =
       occupiedVenueSlots.add(venueSlotKey);
     }
 
-    if (confirmedFixtureCount !== 41 || pendingFixtureCount !== 1) {
+    if (confirmedFixtureCount !== 42 || pendingFixtureCount !== 0) {
       throw new Error(
-        "The manifest must contain 41 confirmed fixtures and one pending opener.",
+        "The manifest must contain 42 confirmed fixtures and no pending fixtures.",
       );
     }
     const opener = OFFICIAL_2026_FIXTURES[0];
     if (
       opener.homeTeamKey !== "samba-boys" ||
       opener.awayTeamKey !== "nysc-fc" ||
-      opener.scheduleStatus !== "pending"
+      opener.scheduleStatus !== "confirmed" ||
+      opener.kickoffAt !== "2026-08-23T14:00:00.000Z" ||
+      opener.venueName !== "Tribu Arena"
     ) {
       throw new Error(
-        "Official fixture 1 must be the unscheduled Samba Boys vs NYSC opener.",
+        "Official fixture 1 must be Samba Boys vs NYSC at Tribu Arena on 2026-08-23 at 15:00 Africa/Lagos.",
       );
     }
     if (

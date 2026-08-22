@@ -1,6 +1,8 @@
 import {
   OFFICIAL_2026_FIXTURE_PUBLICATION_HASH,
+  OFFICIAL_2026_FIXTURE_SOURCE_REFERENCE,
   OFFICIAL_2026_FIXTURES,
+  OFFICIAL_2026_OPENER_SUPPLEMENT,
   OFFICIAL_2026_SOURCE_BYTE_LENGTH,
   OFFICIAL_2026_SOURCE_SHA256,
   OFFICIAL_2026_SOURCE_TITLE,
@@ -249,7 +251,7 @@ export const buildOfficial2026MigrationPublicationPlan = (
       qualificationSnapshot: [] as unknown[],
     },
     auditResult: {
-      migrationVersion: 1,
+      migrationVersion: 2,
       migratedAt,
       tournamentStatus: status,
       backupReference: { ...input.backupReference },
@@ -257,6 +259,7 @@ export const buildOfficial2026MigrationPublicationPlan = (
       sourceSha256: OFFICIAL_2026_SOURCE_SHA256,
       sourceByteLength: OFFICIAL_2026_SOURCE_BYTE_LENGTH,
       sourceTimeZone: OFFICIAL_2026_TIME_ZONE,
+      openerSupplement: { ...OFFICIAL_2026_OPENER_SUPPLEMENT },
       fixturePublicationHash: OFFICIAL_2026_FIXTURE_PUBLICATION_HASH,
       fixtureCount: OFFICIAL_2026_FIXTURES.length,
       confirmedFixtureCount,
@@ -319,7 +322,7 @@ export const assertOfficial2026CommittedMatchesMatchManifest = (
       (right.officialFixtureNumber ?? Number.MAX_SAFE_INTEGER)
   );
   const expectedPublishedAt = migratedAt.toISOString();
-  const sourceReference = `docx-sha256:${OFFICIAL_2026_SOURCE_SHA256}`;
+  const sourceReference = OFFICIAL_2026_FIXTURE_SOURCE_REFERENCE;
 
   for (let index = 0; index < OFFICIAL_2026_FIXTURES.length; index++) {
     const expected = OFFICIAL_2026_FIXTURES[index];

@@ -1,6 +1,8 @@
 import {
   OFFICIAL_2026_FIXTURE_PUBLICATION_HASH,
+  OFFICIAL_2026_FIXTURE_SOURCE_REFERENCE,
   OFFICIAL_2026_FIXTURES,
+  OFFICIAL_2026_OPENER_SUPPLEMENT,
   OFFICIAL_2026_SOURCE_SHA256,
   OFFICIAL_2026_TEAMS,
   OFFICIAL_2026_TIME_ZONE,
@@ -193,10 +195,12 @@ describe('official 2026 destructive migration guards', () => {
         sourceTimeZone: OFFICIAL_2026_TIME_ZONE,
         fixturePublicationHash: OFFICIAL_2026_FIXTURE_PUBLICATION_HASH,
         fixtureCount: 42,
-        confirmedFixtureCount: 41,
-        pendingFixtureCount: 1,
+        confirmedFixtureCount: 42,
+        pendingFixtureCount: 0,
         teamCount: 14,
         rosterPlayerCount: 99,
+        migrationVersion: 2,
+        openerSupplement: OFFICIAL_2026_OPENER_SUPPLEMENT,
       })
     );
   });
@@ -291,7 +295,7 @@ describe('official 2026 destructive migration guards', () => {
         officialFixtureNumber: fixture.officialNumber,
         fixtureSource: MatchFixtureSource.PHYSICAL_OFFICIAL,
         fixturePublicationHash: OFFICIAL_2026_FIXTURE_PUBLICATION_HASH,
-        fixtureSourceReference: `docx-sha256:${OFFICIAL_2026_SOURCE_SHA256}`,
+        fixtureSourceReference: OFFICIAL_2026_FIXTURE_SOURCE_REFERENCE,
         fixturePublishedAt: migratedAt,
         events: [],
         isDeleted: false,
@@ -309,6 +313,12 @@ describe('official 2026 destructive migration guards', () => {
     for (const corrupt of [
       (matches: ReturnType<typeof buildStoredMatches>) => {
         matches[0].homeTeam = matches[1].homeTeam;
+      },
+      (matches: ReturnType<typeof buildStoredMatches>) => {
+        matches[0].date = new Date('2026-08-23T13:00:00.000Z');
+      },
+      (matches: ReturnType<typeof buildStoredMatches>) => {
+        matches[0].venue = 'Wrong Arena';
       },
       (matches: ReturnType<typeof buildStoredMatches>) => {
         matches[1].date = new Date('2026-08-30T13:00:00.000Z');
