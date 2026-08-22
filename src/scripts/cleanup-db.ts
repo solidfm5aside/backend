@@ -17,6 +17,7 @@ import '@/models/tournament.model';
 import '@/models/tournament-entry.model';
 import '@/models/tournament-roster-entry.model';
 import '@/models/venue.model';
+import '@/models/womens-competition-final.model';
 
 dotenv.config();
 
@@ -24,6 +25,7 @@ const SEASON_RESET_COLLECTIONS = [
   'competitionoperations',
   'competitionbrackets',
   'competitiondraws',
+  'womenscompetitionfinals',
   'tournamentrosterentries',
   'playerstats',
   'standings',

@@ -16,11 +16,18 @@ import {
 import {
   countActivePlayersForTeam,
   fenceTeamLifecycle,
+  findTeamDivisionDependency,
   findOpenTournamentEntryForTeam,
   TeamLifecycleError,
 } from '@/services/team-lifecycle.service';
+import {
+  CompetitionDivision,
+  competitionDivisionFilter,
+  resolveCompetitionDivision,
+} from '@/models/competition-division';
 
 const REGISTRATION_STATUSES = new Set(['pending', 'registered', 'withdrawn']);
+const TEAM_DIVISIONS = new Set(Object.values(CompetitionDivision));
 const MAX_PAGE_SIZE = 100;
 
 const parsePositiveInteger = (value: unknown, fallback: number, maximum?: number): number | null => {
@@ -38,6 +45,7 @@ export const getTeams = async (req: Request, res: Response) => {
     const page = parsePositiveInteger(req.query.page, 1);
     const limit = parsePositiveInteger(req.query.limit, 10, MAX_PAGE_SIZE);
     const registrationStatus = req.query.registrationStatus;
+    const division = req.query.division;
 
     if (page === null || limit === null) {
       return res.status(400).json({
@@ -53,12 +61,21 @@ export const getTeams = async (req: Request, res: Response) => {
     ) {
       return res.status(400).json({ success: false, message: 'Invalid registration status' });
     }
+    if (
+      division !== undefined &&
+      (typeof division !== 'string' || !TEAM_DIVISIONS.has(division as CompetitionDivision))
+    ) {
+      return res.status(400).json({ success: false, message: 'Invalid team division' });
+    }
 
     const skip = (page - 1) * limit;
 
     const query: Record<string, unknown> = { isDeleted: false };
     if (registrationStatus && registrationStatus !== 'all') {
       query.registrationStatus = registrationStatus;
+    }
+    if (division === CompetitionDivision.MEN || division === CompetitionDivision.WOMEN) {
+      Object.assign(query, competitionDivisionFilter(division));
     }
 
     const teams = await Team.find(query)
@@ -70,7 +87,10 @@ export const getTeams = async (req: Request, res: Response) => {
 
     res.status(200).json({
       success: true,
-      data: teams,
+      data: teams.map((team) => ({
+        ...team.toObject(),
+        division: resolveCompetitionDivision(team.division),
+      })),
       pagination: {
         page,
         limit,
@@ -89,17 +109,30 @@ export const getPublicTeams = async (req: Request, res: Response) => {
   try {
     const page = parsePositiveInteger(req.query.page, 1);
     const limit = parsePositiveInteger(req.query.limit, 10, MAX_PAGE_SIZE);
+    const division = req.query.division;
     if (page === null || limit === null) {
       return res.status(400).json({
         success: false,
         message: `Page and limit must be positive integers; limit cannot exceed ${MAX_PAGE_SIZE}`,
       });
     }
+    if (
+      division !== undefined &&
+      (typeof division !== 'string' || !TEAM_DIVISIONS.has(division as CompetitionDivision))
+    ) {
+      return res.status(400).json({ success: false, message: 'Invalid team division' });
+    }
 
-    const query = { isDeleted: false, registrationStatus: 'registered' as const };
+    const query: Record<string, unknown> = {
+      isDeleted: false,
+      registrationStatus: 'registered' as const,
+    };
+    if (division === CompetitionDivision.MEN || division === CompetitionDivision.WOMEN) {
+      Object.assign(query, competitionDivisionFilter(division));
+    }
     const [teams, total] = await Promise.all([
       Team.find(query)
-        .select('name city stadium colors logo foundedYear registrationStatus')
+        .select('name city stadium colors logo foundedYear registrationStatus division')
         .skip((page - 1) * limit)
         .limit(limit)
         .sort({ createdAt: -1, _id: -1 }),
@@ -108,7 +141,10 @@ export const getPublicTeams = async (req: Request, res: Response) => {
 
     res.status(200).json({
       success: true,
-      data: teams,
+      data: teams.map((team) => ({
+        ...team.toObject(),
+        division: resolveCompetitionDivision(team.division),
+      })),
       pagination: { page, limit, total, pages: Math.ceil(total / limit) },
       timestamp: new Date().toISOString(),
     });
@@ -124,7 +160,10 @@ export const getTeam = async (req: Request, res: Response) => {
     if (!team) {
       return res.status(404).json({ success: false, message: 'Team not found' });
     }
-    res.status(200).json({ success: true, data: team });
+    res.status(200).json({
+      success: true,
+      data: { ...team.toObject(), division: resolveCompetitionDivision(team.division) },
+    });
   } catch {
     res.status(500).json({ success: false, message: 'Failed to fetch team' });
   }
@@ -136,11 +175,14 @@ export const getPublicTeam = async (req: Request, res: Response) => {
       _id: req.params.id,
       isDeleted: false,
       registrationStatus: 'registered',
-    }).select('name city stadium colors logo foundedYear registrationStatus');
+    }).select('name city stadium colors logo foundedYear registrationStatus division');
     if (!team) {
       return res.status(404).json({ success: false, message: 'Team not found' });
     }
-    res.status(200).json({ success: true, data: team });
+    res.status(200).json({
+      success: true,
+      data: { ...team.toObject(), division: resolveCompetitionDivision(team.division) },
+    });
   } catch (error) {
     logger.error('Get Public Team Error:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch team' });
@@ -167,6 +209,7 @@ export const createTeam = async (req: Request, res: Response) => {
     const team = await Team.create({
       ...req.body,
       logo: logoUrl,
+      division: resolveCompetitionDivision(req.body.division),
     });
     res.status(201).json({ success: true, data: team, message: 'Team created successfully' });
   } catch (error: unknown) {
@@ -191,12 +234,14 @@ export const updateTeam = async (req: Request, res: Response) => {
     const logoChanged =
       req.file !== undefined || Object.prototype.hasOwnProperty.call(req.body, 'logo');
     const identityChanged = logoChanged || nameChanged;
+    const requestedDivision = req.body.division as CompetitionDivision | undefined;
+    const divisionFieldProvided = Object.prototype.hasOwnProperty.call(req.body, 'division');
     let identityVersion: number | undefined;
-    if (identityChanged) {
+    if (identityChanged || divisionFieldProvided) {
       const currentTeam = await Team.findOne({
         _id: req.params.id,
         isDeleted: false,
-      }).select('name logo __v');
+      }).select('name logo division __v');
       if (!currentTeam) {
         return res.status(404).json({ success: false, message: 'Team not found' });
       }
@@ -237,21 +282,20 @@ export const updateTeam = async (req: Request, res: Response) => {
     let team: ITeam | null = null;
     let teamStateChanged = false;
 
-    if (identityChanged || deactivatesTeam) {
+    if (identityChanged || deactivatesTeam || divisionFieldProvided) {
       session = await mongoose.startSession();
       const identitySession = session;
       await identitySession.withTransaction(async () => {
         team = null;
         teamStateChanged = false;
+        const fencedTeam =
+          deactivatesTeam || divisionFieldProvided
+            ? await fenceTeamLifecycle(req.params.id as string, identitySession)
+            : null;
+        if ((deactivatesTeam || divisionFieldProvided) && !fencedTeam) return;
         if (deactivatesTeam) {
-          const fencedTeam = await fenceTeamLifecycle(
-            req.params.id as string,
-            identitySession
-          );
-          if (!fencedTeam) return;
-
           const openEntry = await findOpenTournamentEntryForTeam(
-            fencedTeam._id,
+            fencedTeam!._id,
             identitySession
           );
           if (openEntry) {
@@ -261,6 +305,22 @@ export const updateTeam = async (req: Request, res: Response) => {
               'TEAM_HAS_ACTIVE_TOURNAMENT_ENTRY',
               openEntry
             );
+          }
+        }
+        if (divisionFieldProvided) {
+          if (resolveCompetitionDivision(fencedTeam!.division) !== requestedDivision) {
+            const dependency = await findTeamDivisionDependency(
+              fencedTeam!._id,
+              identitySession
+            );
+            if (dependency) {
+              throw new TeamLifecycleError(
+                'Team division cannot be changed after players or tournament entries exist.',
+                409,
+                'TEAM_DIVISION_LOCKED',
+                { dependency }
+              );
+            }
           }
         }
 
@@ -275,7 +335,7 @@ export const updateTeam = async (req: Request, res: Response) => {
         );
         team = updatedTeam;
         if (!updatedTeam) {
-          teamStateChanged = identityChanged;
+          teamStateChanged = identityChanged || divisionFieldProvided;
           return;
         }
 
@@ -432,7 +492,8 @@ export const registerTeam = async (req: Request, res: Response) => {
     const team = await Team.create({
       ...teamData,
       logo: logoUrl || teamData.logo, // Use uploaded URL, fallback to existing or empty
-      registrationStatus: 'pending'
+      registrationStatus: 'pending',
+      division: CompetitionDivision.MEN,
     });
     
     logger.info(`New team registration: ${team.name} by ${team.captainName}`);

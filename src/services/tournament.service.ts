@@ -2,14 +2,21 @@ import Tournament, {
   CompetitionTieBreaker,
   CompetitionWorkflowState,
   FIXED_V2_COMPETITION_RULES,
+  FIXED_WOMENS_COMPETITION_RULES,
   TournamentFormat,
   TournamentStatus,
 } from '@/models/tournament.model';
+import {
+  CompetitionDivision,
+  competitionDivisionFilter,
+  resolveCompetitionDivision,
+} from '@/models/competition-division';
 import Team from '@/models/team.model';
 import Match, { MatchStage } from '@/models/match.model';
 import Standings from '@/models/standings.model';
 import TournamentEntry from '@/models/tournament-entry.model';
 import { getCompetitionBracketState } from './competition.service';
+import { getWomensBracketState } from './womens-competition.service';
 import {
   isTournamentDateRangeValid,
   TournamentDateChanges,
@@ -23,7 +30,8 @@ import {
 
 type TournamentMutationData = Record<string, unknown> & {
   format?: TournamentFormat;
-  formatVersion?: 1 | 2;
+  formatVersion?: 1 | 2 | 3;
+  division?: CompetitionDivision;
 };
 
 const TOURNAMENT_STATUSES = new Set<string>(Object.values(TournamentStatus));
@@ -34,6 +42,7 @@ export const PUBLIC_TOURNAMENT_FIELDS = [
   'startDate',
   'endDate',
   'status',
+  'division',
   'currentStage',
   'fixturesGenerated',
   'formatVersion',
@@ -64,29 +73,43 @@ export const createTournament = async (data: TournamentMutationData) => {
   if (typeof normalizedData.season === 'string') {
     normalizedData.season = normalizedData.season.trim();
   }
-  if (
-    normalizedData.formatVersion !== 2 ||
-    normalizedData.format !== TournamentFormat.TWO_GROUP_KNOCKOUT
-  ) {
+  const createsMensCompetition =
+    normalizedData.formatVersion === 2 &&
+    normalizedData.format === TournamentFormat.TWO_GROUP_KNOCKOUT &&
+    resolveCompetitionDivision(normalizedData.division) === CompetitionDivision.MEN;
+  const createsWomensCompetition =
+    normalizedData.formatVersion === 3 &&
+    normalizedData.format === TournamentFormat.SINGLE_TABLE_FINAL &&
+    normalizedData.division === CompetitionDivision.WOMEN;
+  if (!createsMensCompetition && !createsWomensCompetition) {
     throw new TournamentMutationError(
-      'New tournaments must use the fixed two-group competition format.',
+      'New tournaments must use a supported fixed competition format and division.',
       400,
       'FIXED_COMPETITION_FORMAT_REQUIRED'
     );
   }
 
+  const rules = createsWomensCompetition
+    ? FIXED_WOMENS_COMPETITION_RULES
+    : FIXED_V2_COMPETITION_RULES;
+
   return await Tournament.create({
     ...normalizedData,
-    formatVersion: 2,
-    format: TournamentFormat.TWO_GROUP_KNOCKOUT,
+    formatVersion: createsWomensCompetition ? 3 : 2,
+    format: createsWomensCompetition
+      ? TournamentFormat.SINGLE_TABLE_FINAL
+      : TournamentFormat.TWO_GROUP_KNOCKOUT,
+    division: createsWomensCompetition
+      ? CompetitionDivision.WOMEN
+      : CompetitionDivision.MEN,
     workflowState: CompetitionWorkflowState.SETUP,
     workflowRevision: 0,
-    currentStage: MatchStage.GROUP_STAGE,
-    leagueRounds: 0,
+    currentStage: createsWomensCompetition ? MatchStage.LEAGUE : MatchStage.GROUP_STAGE,
+    leagueRounds: createsWomensCompetition ? 3 : 0,
     fixturesGenerated: false,
     status: TournamentStatus.UPCOMING,
     competitionRules: {
-      ...FIXED_V2_COMPETITION_RULES,
+      ...rules,
       tieBreakers: [
         CompetitionTieBreaker.POINTS,
         CompetitionTieBreaker.GOAL_DIFFERENCE,
@@ -107,32 +130,41 @@ export const getTournaments = async (query: Record<string, unknown> = {}) => {
   if (typeof query.format === 'string' && TOURNAMENT_FORMATS.has(query.format)) {
     filter.format = query.format;
   }
+  if (query.division === CompetitionDivision.MEN || query.division === CompetitionDivision.WOMEN) {
+    Object.assign(filter, competitionDivisionFilter(query.division));
+  }
   const tournaments = await Tournament.find(filter)
     .select(PUBLIC_TOURNAMENT_FIELDS)
     .populate('championTeamId runnerUpTeamId thirdPlaceTeamId', 'name logo city')
     .sort({ createdAt: -1 })
     .lean();
-  const completedV2Ids = tournaments
+  const completedCompetitionIds = tournaments
     .filter(
       (tournament) =>
-        tournament.formatVersion === 2 &&
-        tournament.format === TournamentFormat.TWO_GROUP_KNOCKOUT &&
+        ((tournament.formatVersion === 2 &&
+          tournament.format === TournamentFormat.TWO_GROUP_KNOCKOUT) ||
+          (tournament.formatVersion === 3 &&
+            tournament.format === TournamentFormat.SINGLE_TABLE_FINAL)) &&
         tournament.workflowState === CompetitionWorkflowState.COMPLETED
     )
     .map((tournament) => tournament._id.toString());
-  if (completedV2Ids.length === 0) return tournaments;
+  const normalizedTournaments = tournaments.map((tournament) => ({
+    ...tournament,
+    division: resolveCompetitionDivision(tournament.division),
+  }));
+  if (completedCompetitionIds.length === 0) return normalizedTournaments;
 
   const identitySnapshots = buildCompetitionIdentitySnapshotMap(
     await TournamentEntry.find({
-      tournamentId: { $in: completedV2Ids },
+      tournamentId: { $in: completedCompetitionIds },
       isDeleted: false,
     })
       .select('tournamentId teamId teamNameSnapshot teamLogoSnapshot')
       .lean()
   );
-  return tournaments.map((tournament) => {
+  return normalizedTournaments.map((tournament) => {
     const tournamentId = tournament._id.toString();
-    if (!completedV2Ids.includes(tournamentId)) return tournament;
+    if (!completedCompetitionIds.includes(tournamentId)) return tournament;
     const withSnapshot = (team: unknown) => {
       const teamId = competitionReferenceId(team);
       return teamId
@@ -161,15 +193,16 @@ export const updateTournament = async (id: string, data: TournamentMutationData)
     Object.prototype.hasOwnProperty.call(data, 'endDate');
   if (
     Object.prototype.hasOwnProperty.call(data, 'formatVersion') ||
-    Object.prototype.hasOwnProperty.call(data, 'format')
+    Object.prototype.hasOwnProperty.call(data, 'format') ||
+    Object.prototype.hasOwnProperty.call(data, 'division')
   ) {
     throw new TournamentMutationError(
-      'Tournament format is immutable after creation.',
+      'Tournament format and division are immutable after creation.',
       409,
       'TOURNAMENT_FORMAT_LOCKED'
     );
   }
-  if (existing.formatVersion === 2) {
+  if (existing.formatVersion === 2 || existing.formatVersion === 3) {
     const workflowOwnedFields = [
       'workflowState',
       'workflowRevision',
@@ -194,7 +227,7 @@ export const updateTournament = async (id: string, data: TournamentMutationData)
     );
     if (attemptedWorkflowFields.length > 0) {
       throw new TournamentMutationError(
-        `Use the v2 competition workflow to update: ${attemptedWorkflowFields.join(', ')}.`,
+        `Use the competition workflow to update: ${attemptedWorkflowFields.join(', ')}.`,
         409,
         'V2_WORKFLOW_FIELDS_LOCKED'
       );
@@ -247,8 +280,10 @@ export const getTournamentArchive = async () => {
   
   for (const tournament of completedTournaments) {
     if (
-      tournament.formatVersion === 2 &&
-      tournament.format === TournamentFormat.TWO_GROUP_KNOCKOUT
+      (tournament.formatVersion === 2 &&
+        tournament.format === TournamentFormat.TWO_GROUP_KNOCKOUT) ||
+      (tournament.formatVersion === 3 &&
+        tournament.format === TournamentFormat.SINGLE_TABLE_FINAL)
     ) {
       const championTeamId = competitionReferenceId(tournament.championTeamId);
       const championSnapshot = championTeamId
@@ -264,6 +299,9 @@ export const getTournamentArchive = async () => {
         _id: tournament._id,
         name: tournament.name,
         season: tournament.season,
+        formatVersion: tournament.formatVersion,
+        format: tournament.format,
+        division: resolveCompetitionDivision(tournament.division),
         champion: championSnapshot
           ? applyTeamIdentitySnapshot(tournament.championTeamId, championSnapshot)
           : tournament.championTeamId ?? null,
@@ -280,6 +318,9 @@ export const getTournamentArchive = async () => {
       _id: tournament._id,
       name: tournament.name,
       season: tournament.season,
+      formatVersion: tournament.formatVersion,
+      format: tournament.format,
+      division: resolveCompetitionDivision(tournament.division),
       champion: topTeam ? topTeam.teamId : null,
     });
   }
@@ -292,8 +333,10 @@ import Player from '@/models/player.model';
 export const checkTournamentReadiness = async (tournamentId: string) => {
   const tournament = await Tournament.findById(tournamentId);
   if (!tournament) throw new Error('Tournament not found');
-  if (tournament.formatVersion === 2) {
-    throw new Error('Use the v2 competition overview and entry readiness workflow for this tournament.');
+  if (tournament.formatVersion === 2 || tournament.formatVersion === 3) {
+    throw new Error(
+      'Use the competition overview and entry readiness workflow for this tournament.'
+    );
   }
 
   const teams = await Team.find({ isDeleted: false });
@@ -337,6 +380,12 @@ export const getBracketData = async (tournamentId: string) => {
     tournament.format === TournamentFormat.TWO_GROUP_KNOCKOUT
   ) {
     return getCompetitionBracketState(tournamentId);
+  }
+  if (
+    tournament?.formatVersion === 3 &&
+    tournament.format === TournamentFormat.SINGLE_TABLE_FINAL
+  ) {
+    return getWomensBracketState(tournamentId);
   }
 
   const knockoutStages = [

@@ -20,6 +20,10 @@ import {
   calculateGroupedStandings,
   recalculateCompetitionStandingsInSession,
 } from './competition.service';
+import {
+  calculateWomensStandings,
+  recalculateWomensStandingsInSession,
+} from './womens-competition.service';
 
 const tournamentStatusPriority = (status: string): number => {
   if (status === 'ongoing') return 0;
@@ -51,6 +55,13 @@ const recalculateTournamentStatsInSession = async (
     tournament.format === TournamentFormat.TWO_GROUP_KNOCKOUT
   ) {
     await recalculateCompetitionStandingsInSession(tournamentId, session);
+    return;
+  }
+  if (
+    tournament?.formatVersion === 3 &&
+    tournament.format === TournamentFormat.SINGLE_TABLE_FINAL
+  ) {
+    await recalculateWomensStandingsInSession(tournamentId, session);
     return;
   }
 
@@ -123,6 +134,12 @@ export const getTournamentStandings = async (tournamentId: string) => {
     const groups = await calculateGroupedStandings(tournamentId);
     return [...groups.A, ...groups.B];
   }
+  if (
+    tournament?.formatVersion === 3 &&
+    tournament.format === TournamentFormat.SINGLE_TABLE_FINAL
+  ) {
+    return calculateWomensStandings(tournamentId);
+  }
   return await Standings.find({ tournamentId })
     .populate('teamId', 'name logo')
     .sort({ points: -1, goalDifference: -1, goalsFor: -1 });
@@ -132,15 +149,17 @@ export const getTopScorers = async (tournamentId: string) => {
   const tournament = await Tournament.findById(tournamentId)
     .select('formatVersion format workflowState')
     .lean();
-  const completedV2 = Boolean(
-    tournament?.formatVersion === 2 &&
-      tournament.format === TournamentFormat.TWO_GROUP_KNOCKOUT &&
-      tournament.workflowState === CompetitionWorkflowState.COMPLETED
+  const completedCompetition = Boolean(
+    tournament?.workflowState === CompetitionWorkflowState.COMPLETED &&
+      ((tournament.formatVersion === 2 &&
+        tournament.format === TournamentFormat.TWO_GROUP_KNOCKOUT) ||
+        (tournament.formatVersion === 3 &&
+          tournament.format === TournamentFormat.SINGLE_TABLE_FINAL))
   );
   const statsQuery = PlayerStats.find({ tournamentId })
     .sort({ goals: -1, assists: -1 })
     .limit(10);
-  if (!completedV2) {
+  if (!completedCompetition) {
     return await statsQuery
       .populate('playerId', 'name')
       .populate('teamId', 'name logo');

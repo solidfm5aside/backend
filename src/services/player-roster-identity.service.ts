@@ -35,8 +35,10 @@ export const refreshOpenTournamentRosterPlayerSnapshots = async (
     const fenced = await Tournament.findOneAndUpdate(
       {
         _id: tournamentId,
-        formatVersion: 2,
-        format: TournamentFormat.TWO_GROUP_KNOCKOUT,
+        $or: [
+          { formatVersion: 2, format: TournamentFormat.TWO_GROUP_KNOCKOUT },
+          { formatVersion: 3, format: TournamentFormat.SINGLE_TABLE_FINAL },
+        ],
         workflowState: { $ne: CompetitionWorkflowState.COMPLETED },
         isDeleted: false,
       },
@@ -120,8 +122,10 @@ export const completedCompetitionSnapshotReferencesPlayerPhoto = async (
   photoUrl: string
 ): Promise<boolean> => {
   const completedTournamentIds = await Tournament.find({
-    formatVersion: 2,
-    format: TournamentFormat.TWO_GROUP_KNOCKOUT,
+    $or: [
+      { formatVersion: 2, format: TournamentFormat.TWO_GROUP_KNOCKOUT },
+      { formatVersion: 3, format: TournamentFormat.SINGLE_TABLE_FINAL },
+    ],
     workflowState: CompetitionWorkflowState.COMPLETED,
   }).distinct('_id');
   if (completedTournamentIds.length === 0) return false;

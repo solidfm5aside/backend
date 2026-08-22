@@ -12,9 +12,13 @@ import Match, {
 import CompetitionBracket, {
   CompetitionBracketNodeKind,
 } from '@/models/competition-bracket.model';
+import WomensCompetitionFinal, {
+  WomensFinalStatus,
+} from '@/models/womens-competition-final.model';
 import Tournament, {
   CompetitionWorkflowState,
   TournamentFormat,
+  TournamentStatus,
 } from '@/models/tournament.model';
 import Player from '@/models/player.model';
 import Venue from '@/models/venue.model';
@@ -36,6 +40,7 @@ import {
 } from '@/utils/completed-competition-identity.util';
 import { getNextLegacyStage } from '@/utils/legacy-knockout.util';
 import { competitionLocalCalendarDay } from '@/utils/official-fixture.util';
+import { fenceTeamLifecycles } from './team-lifecycle.service';
 
 const isKnockoutMatch = (match: IMatch): boolean =>
   match.stage !== MatchStage.LEAGUE && match.stage !== MatchStage.GROUP_STAGE;
@@ -48,6 +53,25 @@ const assertMatchScheduleConfirmed = (match: IMatch): void => {
   ) {
     throw new Error('Confirm the physical kickoff time and venue before starting this match');
   }
+};
+
+const markManagedTournamentOngoing = async (
+  tournamentId: string | Types.ObjectId,
+  session: ClientSession
+): Promise<void> => {
+  await Tournament.updateOne(
+    {
+      _id: tournamentId,
+      status: TournamentStatus.UPCOMING,
+      isDeleted: false,
+      $or: [
+        { formatVersion: 2, format: TournamentFormat.TWO_GROUP_KNOCKOUT },
+        { formatVersion: 3, format: TournamentFormat.SINGLE_TABLE_FINAL },
+      ],
+    },
+    { $set: { status: TournamentStatus.ONGOING } },
+    { session }
+  );
 };
 
 interface MatchEventInput {
@@ -138,6 +162,25 @@ const assertBracketResultEditable = async (
   if (match.resultLockedAt) {
     throw new Error('This result is locked because it has already advanced the bracket');
   }
+  if (match.womensFinalId) {
+    const finalQuery = WomensCompetitionFinal.findOne({
+      _id: match.womensFinalId,
+      tournamentId: match.tournamentId,
+      matchId: match._id,
+    }).select('status championTeamId');
+    if (session) finalQuery.session(session);
+    const finalState = await finalQuery.lean();
+    if (!finalState) {
+      throw new Error('This physical final references a missing durable women’s final state');
+    }
+    if (
+      finalState.status === WomensFinalStatus.CHAMPION_DECIDED ||
+      finalState.championTeamId
+    ) {
+      throw new Error('This result is locked because the competition outcome was recorded');
+    }
+    return;
+  }
   if (!match.bracketId || !match.bracketNodeKey) {
     const tournamentQuery = Tournament.findById(match.tournamentId).select(
       'formatVersion format'
@@ -199,24 +242,29 @@ const assertGroupStageResultEditable = async (
   match: IMatch,
   session?: ClientSession
 ): Promise<void> => {
-  if (match.stage !== MatchStage.GROUP_STAGE) return;
+  if (match.stage !== MatchStage.GROUP_STAGE && match.stage !== MatchStage.LEAGUE) return;
   if (match.resultLockedAt) {
-    throw new Error('Group-stage results are locked after qualification is finalized');
+    throw new Error('League results are locked after qualification is finalized');
   }
   const tournamentQuery = Tournament.findById(match.tournamentId).select(
     'formatVersion format workflowState'
   );
   if (session) tournamentQuery.session(session);
   const tournament = await tournamentQuery.lean();
-  if (
-    !tournament ||
-    tournament.formatVersion !== 2 ||
-    tournament.format !== TournamentFormat.TWO_GROUP_KNOCKOUT
-  ) {
+  const managedMensGroup =
+    tournament?.formatVersion === 2 &&
+    tournament.format === TournamentFormat.TWO_GROUP_KNOCKOUT &&
+    match.stage === MatchStage.GROUP_STAGE;
+  const managedWomensLeague =
+    tournament?.formatVersion === 3 &&
+    tournament.format === TournamentFormat.SINGLE_TABLE_FINAL &&
+    match.stage === MatchStage.LEAGUE;
+  if (match.stage === MatchStage.LEAGUE && !managedWomensLeague) return;
+  if (!managedMensGroup && !managedWomensLeague) {
     throw new Error('This group-stage match references an invalid tournament');
   }
   if (tournament.workflowState !== CompetitionWorkflowState.GROUP_STAGE) {
-    throw new Error('Group-stage results are locked after qualification is finalized');
+    throw new Error('League results are locked after qualification is finalized');
   }
 };
 
@@ -241,8 +289,10 @@ const assertEventPlayersEligible = async (
   if (session) tournamentQuery.session(session);
   const tournament = await tournamentQuery.lean();
   if (
-    tournament?.formatVersion === 2 &&
-    tournament.format === TournamentFormat.TWO_GROUP_KNOCKOUT
+    (tournament?.formatVersion === 2 &&
+      tournament.format === TournamentFormat.TWO_GROUP_KNOCKOUT) ||
+    (tournament?.formatVersion === 3 &&
+      tournament.format === TournamentFormat.SINGLE_TABLE_FINAL)
   ) {
     const requestedPlayerIds: Array<string | Types.ObjectId> = [event.playerId];
     if (event.assistPlayerId) requestedPlayerIds.push(event.assistPlayerId);
@@ -295,6 +345,9 @@ export const updateMatchStatus = async (matchId: string, status: MatchStatus) =>
     // A retry of an already-committed status still rebuilds derived state. It
     // can therefore repair data written by an older non-transactional server.
     if (existing.status === status) {
+      if (status === MatchStatus.LIVE) {
+        await markManagedTournamentOngoing(existing.tournamentId, session);
+      }
       await recalculateTournamentStats(existing.tournamentId.toString(), session);
       return {
         match: await existing.populate('homeTeam awayTeam', 'name logo'),
@@ -314,7 +367,10 @@ export const updateMatchStatus = async (matchId: string, status: MatchStatus) =>
       existing.status === MatchStatus.COMPLETED && status === MatchStatus.LIVE;
     let completedResultIsEditable = false;
     if (requestsCompletedReopen) {
-      if (existing.stage === MatchStage.GROUP_STAGE) {
+      if (
+        existing.stage === MatchStage.GROUP_STAGE ||
+        existing.stage === MatchStage.LEAGUE
+      ) {
         await assertGroupStageResultEditable(existing, session);
       }
       if (isKnockout) {
@@ -363,6 +419,9 @@ export const updateMatchStatus = async (matchId: string, status: MatchStatus) =>
       throw new Error('Match state changed during this update. Refresh and retry.');
     }
 
+    if (status === MatchStatus.LIVE) {
+      await markManagedTournamentOngoing(match.tournamentId, session);
+    }
     await recalculateTournamentStats(match.tournamentId.toString(), session);
     return { match, changed: true };
   });
@@ -387,6 +446,12 @@ export const updateMatchDetails = async (
     }
     if ((details.date === null) !== (details.venue === null)) {
       throw new Error('Kickoff time and venue must both be set or both be pending');
+    }
+
+    const participantIds = [existing.homeTeam.toString(), existing.awayTeam.toString()];
+    const fencedTeams = await fenceTeamLifecycles(participantIds, session);
+    if ([...fencedTeams.values()].some((team) => !team)) {
+      throw new Error('The match references an unavailable team');
     }
 
     let kickoffAt: Date | undefined;
@@ -425,7 +490,6 @@ export const updateMatchDetails = async (
 
       const otherConfirmedMatches = await Match.find({
         _id: { $ne: existing._id },
-        tournamentId: existing.tournamentId,
         isDeleted: false,
         scheduleStatus: MatchScheduleStatus.CONFIRMED,
         date: { $exists: true },
@@ -434,10 +498,7 @@ export const updateMatchDetails = async (
         .session(session)
         .lean();
       const requestedDay = competitionLocalCalendarDay(kickoffAt);
-      const participantIds = new Set([
-        existing.homeTeam.toString(),
-        existing.awayTeam.toString(),
-      ]);
+      const participantIdSet = new Set(participantIds);
       for (const other of otherConfirmedMatches) {
         if (!other.date) continue;
         if (
@@ -448,8 +509,8 @@ export const updateMatchDetails = async (
           throw new Error('Another match already uses this venue at the requested kickoff');
         }
         const sharesTeam =
-          participantIds.has(other.homeTeam.toString()) ||
-          participantIds.has(other.awayTeam.toString());
+          participantIdSet.has(other.homeTeam.toString()) ||
+          participantIdSet.has(other.awayTeam.toString());
         if (sharesTeam && competitionLocalCalendarDay(other.date) === requestedDay) {
           throw new Error('A team cannot play more than once on the same local calendar day');
         }
@@ -692,8 +753,10 @@ export const getMatches = async (filter: MatchListFilter = {}) => {
   ];
   const completedV2Tournaments = await Tournament.find({
     _id: { $in: tournamentIds },
-    formatVersion: 2,
-    format: TournamentFormat.TWO_GROUP_KNOCKOUT,
+    $or: [
+      { formatVersion: 2, format: TournamentFormat.TWO_GROUP_KNOCKOUT },
+      { formatVersion: 3, format: TournamentFormat.SINGLE_TABLE_FINAL },
+    ],
     workflowState: CompetitionWorkflowState.COMPLETED,
     isDeleted: false,
   })

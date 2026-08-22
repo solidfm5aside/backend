@@ -1,4 +1,5 @@
 import mongoose, { Schema, Document } from 'mongoose';
+import { CompetitionDivision } from './competition-division';
 
 export interface ITeam extends Document {
   name: string;
@@ -11,6 +12,7 @@ export interface ITeam extends Document {
   contactPhone: string;
   contactEmail: string;
   registrationStatus: 'pending' | 'registered' | 'withdrawn';
+  division?: CompetitionDivision;
   lifecycleRevision: number;
   isDeleted: boolean;
 }
@@ -58,6 +60,11 @@ const teamSchema = new Schema<ITeam>(
       type: String,
       enum: ['pending', 'registered', 'withdrawn'],
       default: 'pending',
+    },
+    division: {
+      type: String,
+      enum: Object.values(CompetitionDivision),
+      default: CompetitionDivision.MEN,
     },
     lifecycleRevision: {
       type: Number,

@@ -71,6 +71,7 @@ export interface IMatch extends Document {
   bracketId?: mongoose.Types.ObjectId;
   bracketNodeKey?: string;
   bracketSlot?: number;
+  womensFinalId?: mongoose.Types.ObjectId;
   venue?: string;
   referee?: string;
   events: IMatchEvent[];
@@ -216,6 +217,10 @@ const matchSchema = new Schema<IMatch>(
     bracketSlot: {
       type: Number,
       min: 1,
+    },
+    womensFinalId: {
+      type: Schema.Types.ObjectId,
+      ref: 'WomensCompetitionFinal',
     },
     venue: String,
     referee: String,

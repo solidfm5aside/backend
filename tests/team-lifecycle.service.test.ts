@@ -98,7 +98,7 @@ describe('team lifecycle dependency fence', () => {
     }
   });
 
-  it('treats only an open v2 competition entry as a lifecycle blocker', async () => {
+  it('treats an open supported competition entry as a lifecycle blocker', async () => {
     const session = { id: 'session' } as never;
     mockedEntry.distinct.mockReturnValue({
       session: jest.fn().mockResolvedValue(['tournament-1']),
@@ -118,8 +118,8 @@ describe('team lifecycle dependency fence', () => {
     });
     expect(mockedTournament.findOne).toHaveBeenCalledWith(
       expect.objectContaining({
-        formatVersion: 2,
-        format: 'two_group_knockout',
+        formatVersion: { $in: [2, 3] },
+        format: { $in: ['two_group_knockout', 'single_table_final'] },
         workflowState: { $ne: 'completed' },
       })
     );

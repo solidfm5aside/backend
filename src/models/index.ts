@@ -16,7 +16,9 @@ export {
   CompetitionCommitteeDecisionMethod,
   CompetitionTieResolutionStatus,
   FIXED_V2_COMPETITION_RULES,
+  FIXED_WOMENS_COMPETITION_RULES,
 } from './tournament.model';
+export { CompetitionDivision } from './competition-division';
 export { default as TournamentEntry, ITournamentEntry } from './tournament-entry.model';
 export {
   default as TournamentRosterEntry,
@@ -30,6 +32,11 @@ export {
   CompetitionBracketNodeKind,
   CompetitionBracketSourceType,
 } from './competition-bracket.model';
+export {
+  default as WomensCompetitionFinal,
+  IWomensCompetitionFinal,
+  WomensFinalStatus,
+} from './womens-competition-final.model';
 export {
   default as Match,
   IMatch,

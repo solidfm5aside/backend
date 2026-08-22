@@ -16,8 +16,10 @@ export interface OpenCompetitionReference {
 }
 
 const openTournamentFilter = {
-  formatVersion: 2 as const,
-  format: TournamentFormat.TWO_GROUP_KNOCKOUT,
+  $or: [
+    { formatVersion: 2 as const, format: TournamentFormat.TWO_GROUP_KNOCKOUT },
+    { formatVersion: 3 as const, format: TournamentFormat.SINGLE_TABLE_FINAL },
+  ],
   workflowState: { $ne: CompetitionWorkflowState.COMPLETED },
   isDeleted: false,
 };

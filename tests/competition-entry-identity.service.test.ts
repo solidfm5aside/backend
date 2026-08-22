@@ -97,8 +97,10 @@ describe('competition entry identity transaction fence', () => {
 
     expect(mockedTournament.find).toHaveBeenCalledWith(
       expect.objectContaining({
-        formatVersion: 2,
-        format: 'two_group_knockout',
+        $or: [
+          { formatVersion: 2, format: 'two_group_knockout' },
+          { formatVersion: 3, format: 'single_table_final' },
+        ],
         workflowState: 'completed',
       })
     );

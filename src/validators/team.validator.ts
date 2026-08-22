@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CompetitionDivision } from '@/models/competition-division';
 
 const approvedImageUrl = z
   .string()
@@ -70,6 +71,7 @@ const teamFields = {
     .max(30, 'Contact phone must not exceed 30 characters'),
   contactEmail: z.string().trim().email('Invalid email address').max(254),
   registrationStatus: z.enum(['pending', 'registered', 'withdrawn']).optional(),
+  division: z.enum(CompetitionDivision).optional(),
 };
 
 export const createTeamSchema = z.object(teamFields);

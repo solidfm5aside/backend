@@ -38,6 +38,10 @@ import TournamentEntry, {
   TournamentEntrySource,
   TournamentEntryStatus,
 } from '@/models/tournament-entry.model';
+import {
+  CompetitionDivision,
+  resolveCompetitionDivision,
+} from '@/models/competition-division';
 import Venue from '@/models/venue.model';
 import {
   buildTournamentRosterSnapshotRows,
@@ -282,7 +286,8 @@ const getV2Tournament = async (tournamentId: string, session?: ClientSession) =>
   }
   if (
     tournament.formatVersion !== 2 ||
-    tournament.format !== TournamentFormat.TWO_GROUP_KNOCKOUT
+    tournament.format !== TournamentFormat.TWO_GROUP_KNOCKOUT ||
+    resolveCompetitionDivision(tournament.division) !== CompetitionDivision.MEN
   ) {
     throw new CompetitionError(
       'This endpoint is only available for v2 two-group tournaments',
@@ -813,6 +818,17 @@ export const addCompetitionEntry = async (
           'Only registered teams can be entered in a tournament',
           409,
           'TEAM_NOT_REGISTERED'
+        );
+      }
+      if (resolveCompetitionDivision(team.division) !== CompetitionDivision.MEN) {
+        throw new CompetitionError(
+          'Only men’s teams can be entered in the men’s tournament.',
+          409,
+          'TEAM_DIVISION_MISMATCH',
+          {
+            tournamentDivision: CompetitionDivision.MEN,
+            teamDivision: resolveCompetitionDivision(team.division),
+          }
         );
       }
       const entryCount = await TournamentEntry.countDocuments({
@@ -1399,7 +1415,10 @@ export const publishGroupFixtures = async (
         registrationStatus: 'registered',
       });
       const unavailableTeamIds = [...fencedTeams.entries()]
-        .filter(([, team]) => !team)
+        .filter(
+          ([, team]) =>
+            !team || resolveCompetitionDivision(team.division) !== CompetitionDivision.MEN
+        )
         .map(([teamId]) => teamId);
       if (unavailableTeamIds.length > 0) {
         throw new CompetitionError(

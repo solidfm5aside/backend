@@ -110,8 +110,10 @@ export const getPlayers = async (req: Request, res: Response) => {
         return res.status(404).json({ success: false, message: 'Tournament not found' });
       }
       usesPublishedTournamentRoster =
-        tournament.formatVersion === 2 &&
-        tournament.format === TournamentFormat.TWO_GROUP_KNOCKOUT &&
+        ((tournament.formatVersion === 2 &&
+          tournament.format === TournamentFormat.TWO_GROUP_KNOCKOUT) ||
+          (tournament.formatVersion === 3 &&
+            tournament.format === TournamentFormat.SINGLE_TABLE_FINAL)) &&
         tournament.fixturesGenerated;
       if (usesPublishedTournamentRoster) {
         const rosterFilter: Record<string, unknown> = { tournamentId };
@@ -125,7 +127,7 @@ export const getPlayers = async (req: Request, res: Response) => {
 
     const skip = (page - 1) * limit;
     const players = await Player.find(filter)
-      .populate('teamId', 'name')
+      .populate('teamId', 'name division')
       .skip(skip)
       .limit(limit)
       .sort({ name: 1, _id: 1 });
@@ -177,7 +179,7 @@ export const getPublicPlayers = async (req: Request, res: Response) => {
     const [players, total] = await Promise.all([
       Player.find(filter)
         .select('name position jerseyNumber nationality teamId')
-        .populate('teamId', 'name logo')
+        .populate('teamId', 'name logo division')
         .skip((page - 1) * limit)
         .limit(limit)
         .sort({ name: 1, _id: 1 }),
@@ -197,7 +199,7 @@ export const getPublicPlayers = async (req: Request, res: Response) => {
 
 export const getPlayer = async (req: Request, res: Response) => {
   try {
-    const player = await Player.findOne({ _id: req.params.id, isDeleted: false }).populate('teamId', 'name');
+    const player = await Player.findOne({ _id: req.params.id, isDeleted: false }).populate('teamId', 'name division');
     if (!player) {
       return res.status(404).json({ success: false, message: 'Player not found' });
     }
@@ -211,7 +213,7 @@ export const getPublicPlayer = async (req: Request, res: Response) => {
   try {
     const player = await Player.findOne({ _id: req.params.id, isDeleted: false })
       .select('name position jerseyNumber nationality teamId')
-      .populate('teamId', 'name logo');
+      .populate('teamId', 'name logo division');
     const populatedTeam = player?.teamId as unknown as { _id?: unknown } | undefined;
     const activeTeam = populatedTeam?._id
       ? await Team.exists({

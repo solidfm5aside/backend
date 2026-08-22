@@ -7,6 +7,10 @@ jest.mock('@/services/standings.service', () => ({
   recalculateTournamentStats: jest.fn(),
 }));
 
+jest.mock('@/services/team-lifecycle.service', () => ({
+  fenceTeamLifecycles: jest.fn(),
+}));
+
 import { createHash } from 'crypto';
 import mongoose, { Types } from 'mongoose';
 import Match, {
@@ -19,7 +23,11 @@ import Match, {
 } from '@/models/match.model';
 import Player from '@/models/player.model';
 import Venue from '@/models/venue.model';
-import Tournament, { TournamentFormat } from '@/models/tournament.model';
+import TournamentRosterEntry from '@/models/tournament-roster-entry.model';
+import Tournament, {
+  CompetitionWorkflowState,
+  TournamentFormat,
+} from '@/models/tournament.model';
 import CompetitionBracket, {
   CompetitionBracketNodeKind,
   CompetitionBracketSourceType,
@@ -33,6 +41,7 @@ import {
 } from '@/services/match.service';
 import { recalculateTournamentStats } from '@/services/standings.service';
 import { broadcastGoal, broadcastMatchUpdate } from '@/sockets/socket';
+import { fenceTeamLifecycles } from '@/services/team-lifecycle.service';
 
 const mockedRecalculate = recalculateTournamentStats as jest.MockedFunction<
   typeof recalculateTournamentStats
@@ -41,6 +50,9 @@ const mockedBroadcastGoal = broadcastGoal as jest.MockedFunction<typeof broadcas
 const mockedBroadcastUpdate = broadcastMatchUpdate as jest.MockedFunction<
   typeof broadcastMatchUpdate
 >;
+const mockedFenceTeamLifecycles = fenceTeamLifecycles as jest.MockedFunction<
+  typeof fenceTeamLifecycles
+>;
 
 const queryResult = <T>(value: T) => {
   const promise = Promise.resolve(value);
@@ -48,6 +60,7 @@ const queryResult = <T>(value: T) => {
     select: jest.fn(),
     session: jest.fn(),
     populate: jest.fn(),
+    distinct: jest.fn(),
     lean: jest.fn().mockResolvedValue(value),
     then: promise.then.bind(promise),
     catch: promise.catch.bind(promise),
@@ -55,6 +68,7 @@ const queryResult = <T>(value: T) => {
   query.select.mockReturnValue(query);
   query.session.mockReturnValue(query);
   query.populate.mockReturnValue(query);
+  query.distinct.mockReturnValue(query);
   return query;
 };
 
@@ -86,6 +100,9 @@ describe('transactional match mutations and derived statistics', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockedRecalculate.mockResolvedValue(undefined);
+    mockedFenceTeamLifecycles.mockResolvedValue(
+      new Map([['available-team', { _id: 'available-team' }]]) as never
+    );
   });
 
   afterEach(() => {
@@ -193,10 +210,147 @@ describe('transactional match mutations and derived statistics', () => {
       { $inc: { __v: 1 } },
       { session }
     );
+    expect(mockedFenceTeamLifecycles).toHaveBeenCalledWith(
+      [existing.homeTeam.toString(), existing.awayTeam.toString()],
+      session
+    );
     expect(mockedBroadcastUpdate).toHaveBeenCalledWith(
       existing._id.toString(),
       responseMatch
     );
+  });
+
+  it('rejects a cross-tournament same-team/day reschedule after acquiring team fences', async () => {
+    const session = buildSession();
+    jest.spyOn(mongoose, 'startSession').mockResolvedValue(session as never);
+    const sharedTeam = new Types.ObjectId();
+    const existing = buildMatch({
+      status: MatchStatus.SCHEDULED,
+      homeTeam: sharedTeam,
+      tournamentId: new Types.ObjectId(),
+      scheduleStatus: MatchScheduleStatus.PENDING,
+      date: undefined,
+      venue: undefined,
+    });
+    const otherTournamentMatch = buildMatch({
+      _id: new Types.ObjectId(),
+      tournamentId: new Types.ObjectId(),
+      homeTeam: sharedTeam,
+      date: new Date('2026-09-01T14:00:00.000Z'),
+      venue: 'Other Arena',
+    });
+    jest.spyOn(Match, 'findById').mockReturnValue(queryResult(existing) as never);
+    jest.spyOn(Venue, 'find').mockReturnValue(
+      queryResult([{ _id: new Types.ObjectId(), name: 'Eclipse Arena', __v: 0 }]) as never
+    );
+    jest.spyOn(Venue, 'updateOne').mockResolvedValue({ modifiedCount: 1 } as never);
+    const findMatches = jest
+      .spyOn(Match, 'find')
+      .mockReturnValue(queryResult([otherTournamentMatch]) as never);
+
+    await expect(
+      updateMatchDetails(existing._id.toString(), {
+        date: '2026-09-01T15:00:00+01:00',
+        venue: 'Eclipse Arena',
+      })
+    ).rejects.toThrow(/more than once on the same local calendar day/i);
+
+    expect(mockedFenceTeamLifecycles).toHaveBeenCalledWith(
+      [existing.homeTeam.toString(), existing.awayTeam.toString()],
+      session
+    );
+    expect(findMatches).toHaveBeenCalledWith(
+      expect.not.objectContaining({ tournamentId: expect.anything() })
+    );
+    expect(mockedRecalculate).not.toHaveBeenCalled();
+  });
+
+  it('locks completed women league event additions and deletions after qualification', async () => {
+    const session = buildSession();
+    jest.spyOn(mongoose, 'startSession').mockResolvedValue(session as never);
+    const findById = jest.spyOn(Match, 'findById');
+    const goalId = new Types.ObjectId();
+    const homeTeam = new Types.ObjectId();
+    const lockedLeague = buildMatch({
+      homeTeam,
+      homeScore: 1,
+      status: MatchStatus.COMPLETED,
+      stage: MatchStage.LEAGUE,
+      resultLockedAt: new Date('2026-09-15T12:00:00.000Z'),
+      events: [
+        {
+          _id: goalId,
+          type: MatchEventType.GOAL,
+          minute: 10,
+          playerId: new Types.ObjectId(),
+          teamId: homeTeam,
+        } as IMatchEvent,
+      ],
+    });
+
+    findById.mockReturnValueOnce(queryResult(lockedLeague) as never);
+    await expect(
+      addMatchEvent(
+        lockedLeague._id.toString(),
+        {
+          type: MatchEventType.YELLOW_CARD,
+          minute: 40,
+          playerId: new Types.ObjectId(),
+          teamId: homeTeam,
+        },
+        'locked-women-add'
+      )
+    ).rejects.toThrow(/locked after qualification/i);
+
+    findById.mockReturnValueOnce(queryResult(lockedLeague) as never);
+    await expect(
+      deleteMatchEvent(lockedLeague._id.toString(), goalId.toString())
+    ).rejects.toThrow(/locked after qualification/i);
+    expect(lockedLeague.save).not.toHaveBeenCalled();
+    expect(mockedRecalculate).not.toHaveBeenCalled();
+    expect(mockedBroadcastUpdate).not.toHaveBeenCalled();
+  });
+
+  it('allows a completed women league correction before qualification is finalized', async () => {
+    const session = buildSession();
+    jest.spyOn(mongoose, 'startSession').mockResolvedValue(session as never);
+    const findById = jest.spyOn(Match, 'findById');
+    const homeTeam = new Types.ObjectId();
+    const playerId = new Types.ObjectId();
+    const editableLeague = buildMatch({
+      homeTeam,
+      status: MatchStatus.COMPLETED,
+      stage: MatchStage.LEAGUE,
+    });
+    const responseMatch = { ...editableLeague };
+    findById
+      .mockReturnValueOnce(queryResult(editableLeague) as never)
+      .mockReturnValueOnce(queryResult(responseMatch) as never);
+    jest.spyOn(Tournament, 'findById').mockReturnValue(
+      queryResult({
+        formatVersion: 3,
+        format: TournamentFormat.SINGLE_TABLE_FINAL,
+        workflowState: CompetitionWorkflowState.GROUP_STAGE,
+      }) as never
+    );
+    jest
+      .spyOn(TournamentRosterEntry, 'find')
+      .mockReturnValue(queryResult([playerId]) as never);
+
+    await expect(
+      addMatchEvent(
+        editableLeague._id.toString(),
+        {
+          type: MatchEventType.YELLOW_CARD,
+          minute: 40,
+          playerId,
+          teamId: homeTeam,
+        },
+        'editable-women-add'
+      )
+    ).resolves.toEqual(expect.objectContaining({ replayed: false }));
+    expect(editableLeague.save).toHaveBeenCalledWith({ session });
+    expect(mockedRecalculate).toHaveBeenCalledTimes(1);
   });
 
   it('propagates a rebuild failure without broadcasting, then applies one event on retry', async () => {
@@ -381,6 +535,9 @@ describe('transactional match mutations and derived statistics', () => {
       populate: jest.fn().mockResolvedValue(responseMatch),
     });
     jest.spyOn(Match, 'findById').mockReturnValue(queryResult(existing) as never);
+    const tournamentUpdate = jest
+      .spyOn(Tournament, 'updateOne')
+      .mockResolvedValue({ matchedCount: 1, modifiedCount: 1 } as never);
     const update = jest.spyOn(Match, 'findOneAndUpdate');
 
     await expect(updateMatchStatus(existing._id.toString(), MatchStatus.LIVE)).resolves.toBe(
@@ -392,6 +549,79 @@ describe('transactional match mutations and derived statistics', () => {
       session
     );
     expect(update).not.toHaveBeenCalled();
+    expect(tournamentUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        _id: existing.tournamentId,
+        status: 'upcoming',
+      }),
+      { $set: { status: 'ongoing' } },
+      { session }
+    );
+    expect(mockedBroadcastUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [2, TournamentFormat.TWO_GROUP_KNOCKOUT],
+    [3, TournamentFormat.SINGLE_TABLE_FINAL],
+  ])(
+    'atomically marks a managed v%s tournament ongoing on its first live match',
+    async (formatVersion, format) => {
+      const session = buildSession();
+      jest.spyOn(mongoose, 'startSession').mockResolvedValue(session as never);
+      const scheduled = buildMatch({ status: MatchStatus.SCHEDULED, __v: 0 });
+      const live = buildMatch({ ...scheduled, status: MatchStatus.LIVE, __v: 1 });
+      jest.spyOn(Match, 'findById').mockReturnValue(queryResult(scheduled) as never);
+      jest.spyOn(Match, 'findOneAndUpdate').mockReturnValue(queryResult(live) as never);
+      const tournamentUpdate = jest
+        .spyOn(Tournament, 'updateOne')
+        .mockResolvedValue({ matchedCount: 1, modifiedCount: 1 } as never);
+
+      await expect(
+        updateMatchStatus(scheduled._id.toString(), MatchStatus.LIVE)
+      ).resolves.toBe(live);
+
+      expect(tournamentUpdate).toHaveBeenCalledWith(
+        {
+          _id: scheduled.tournamentId,
+          status: 'upcoming',
+          isDeleted: false,
+          $or: [
+            { formatVersion: 2, format: TournamentFormat.TWO_GROUP_KNOCKOUT },
+            { formatVersion: 3, format: TournamentFormat.SINGLE_TABLE_FINAL },
+          ],
+        },
+        { $set: { status: 'ongoing' } },
+        { session }
+      );
+      expect(formatVersion).toBe(format === TournamentFormat.TWO_GROUP_KNOCKOUT ? 2 : 3);
+    }
+  );
+
+  it('applies result locks consistently to status, schedule, and winner mutations', async () => {
+    const session = buildSession();
+    jest.spyOn(mongoose, 'startSession').mockResolvedValue(session as never);
+    const findById = jest.spyOn(Match, 'findById');
+    const locked = buildMatch({
+      status: MatchStatus.COMPLETED,
+      stage: MatchStage.FINAL,
+      winner: new Types.ObjectId(),
+      resultLockedAt: new Date('2026-09-20T18:00:00.000Z'),
+    });
+
+    findById.mockReturnValueOnce(queryResult(locked) as never);
+    await expect(updateMatchStatus(locked._id.toString(), MatchStatus.LIVE)).rejects.toThrow(
+      /locked/i
+    );
+    findById.mockReturnValueOnce(queryResult(locked) as never);
+    await expect(
+      updateMatchDetails(locked._id.toString(), { date: null, venue: null })
+    ).rejects.toThrow(/locked/i);
+    findById.mockReturnValueOnce(queryResult(locked) as never);
+    await expect(
+      updateMatchWinner(locked._id.toString(), locked.homeTeam.toString(), false)
+    ).rejects.toThrow(/locked/i);
+
+    expect(mockedRecalculate).not.toHaveBeenCalled();
     expect(mockedBroadcastUpdate).not.toHaveBeenCalled();
   });
 
@@ -400,6 +630,9 @@ describe('transactional match mutations and derived statistics', () => {
     jest.spyOn(mongoose, 'startSession').mockResolvedValue(session as never);
     const findById = jest.spyOn(Match, 'findById');
     const findOneAndUpdate = jest.spyOn(Match, 'findOneAndUpdate');
+    jest
+      .spyOn(Tournament, 'updateOne')
+      .mockResolvedValue({ matchedCount: 1, modifiedCount: 0 } as never);
     const bracketId = new Types.ObjectId();
     const matchId = new Types.ObjectId();
     const tournamentId = new Types.ObjectId();

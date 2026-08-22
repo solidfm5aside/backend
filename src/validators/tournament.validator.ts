@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { TournamentFormat, TournamentStatus } from '@/models/tournament.model';
+import { CompetitionDivision } from '@/models/competition-division';
 
 const dateString = z
   .string()
@@ -22,7 +23,8 @@ const tournamentFields = z.object({
   startDate: dateString,
   endDate: dateString.nullable().optional(),
   status: z.enum(Object.values(TournamentStatus) as [string, ...string[]]).optional(),
-  formatVersion: z.union([z.literal(1), z.literal(2)]).optional(),
+  division: z.enum(CompetitionDivision).optional(),
+  formatVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
   format: z.enum(Object.values(TournamentFormat) as [string, ...string[]]).optional(),
 });
 
@@ -39,10 +41,18 @@ const validateDateOrder = (
   }
 };
 
-export const createTournamentSchema = tournamentFields
-  .extend({
-    formatVersion: z.literal(2),
-    format: z.literal(TournamentFormat.TWO_GROUP_KNOCKOUT),
-  })
+export const createTournamentSchema = z
+  .union([
+    tournamentFields.extend({
+      formatVersion: z.literal(2),
+      format: z.literal(TournamentFormat.TWO_GROUP_KNOCKOUT),
+      division: z.literal(CompetitionDivision.MEN).optional(),
+    }),
+    tournamentFields.extend({
+      formatVersion: z.literal(3),
+      format: z.literal(TournamentFormat.SINGLE_TABLE_FINAL),
+      division: z.literal(CompetitionDivision.WOMEN),
+    }),
+  ])
   .superRefine(validateDateOrder);
 export const updateTournamentSchema = tournamentFields.partial().superRefine(validateDateOrder);

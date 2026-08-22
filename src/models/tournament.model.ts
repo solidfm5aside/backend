@@ -1,5 +1,6 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { MatchStage } from './match.model';
+import { CompetitionDivision } from './competition-division';
 
 export enum TournamentStatus {
   UPCOMING = 'upcoming',
@@ -10,6 +11,7 @@ export enum TournamentStatus {
 export enum TournamentFormat {
   LEGACY_LEAGUE = 'legacy_league',
   TWO_GROUP_KNOCKOUT = 'two_group_knockout',
+  SINGLE_TABLE_FINAL = 'single_table_final',
 }
 
 export enum CompetitionWorkflowState {
@@ -81,6 +83,25 @@ export const FIXED_V2_COMPETITION_RULES: Readonly<ICompetitionRules> = Object.fr
   maxRosterPlayers: 10,
 });
 
+export const FIXED_WOMENS_COMPETITION_RULES: Readonly<ICompetitionRules> = Object.freeze({
+  teamCount: 3,
+  groupCount: 1,
+  teamsPerGroup: 3,
+  roundRobinLegs: 1,
+  qualifiersPerGroup: 2,
+  tieBreakers: Object.freeze([
+    CompetitionTieBreaker.POINTS,
+    CompetitionTieBreaker.GOAL_DIFFERENCE,
+    CompetitionTieBreaker.GOALS_FOR,
+    CompetitionTieBreaker.HEAD_TO_HEAD,
+    CompetitionTieBreaker.COMMITTEE_DECISION,
+  ]) as unknown as CompetitionTieBreaker[],
+  drawMode: null,
+  avoidSameGroupFirstRound: null,
+  thirdPlaceMatch: false,
+  maxRosterPlayers: 10,
+});
+
 export interface ICompetitionTieResolution {
   decisionId: mongoose.Types.ObjectId;
   decisionRevision: number;
@@ -113,10 +134,11 @@ export interface ITournament extends Document {
   startDate: Date;
   endDate?: Date;
   status: TournamentStatus;
+  division?: CompetitionDivision;
   currentStage: MatchStage; 
   leagueRounds: number;
   fixturesGenerated: boolean;
-  formatVersion: 1 | 2;
+  formatVersion: 1 | 2 | 3;
   format: TournamentFormat;
   workflowState: CompetitionWorkflowState;
   workflowRevision: number;
@@ -250,13 +272,18 @@ const tournamentSchema = new Schema<ITournament>(
       enum: Object.values(TournamentStatus),
       default: TournamentStatus.UPCOMING,
     },
+    division: {
+      type: String,
+      enum: Object.values(CompetitionDivision),
+      default: CompetitionDivision.MEN,
+    },
     fixturesGenerated: {
       type: Boolean,
       default: false,
     },
     formatVersion: {
       type: Number,
-      enum: [1, 2],
+      enum: [1, 2, 3],
       default: 1,
     },
     format: {

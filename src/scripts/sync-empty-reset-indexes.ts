@@ -16,6 +16,7 @@ import '@/models/tournament.model';
 import '@/models/tournament-entry.model';
 import '@/models/tournament-roster-entry.model';
 import '@/models/venue.model';
+import '@/models/womens-competition-final.model';
 
 dotenv.config();
 

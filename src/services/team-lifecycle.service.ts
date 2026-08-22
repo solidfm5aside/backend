@@ -84,8 +84,10 @@ export const findOpenTournamentEntryForTeam = async (
 
   const tournament = await Tournament.findOne({
     _id: { $in: tournamentIds },
-    formatVersion: 2,
-    format: TournamentFormat.TWO_GROUP_KNOCKOUT,
+    formatVersion: { $in: [2, 3] },
+    format: {
+      $in: [TournamentFormat.TWO_GROUP_KNOCKOUT, TournamentFormat.SINGLE_TABLE_FINAL],
+    },
     workflowState: { $ne: CompetitionWorkflowState.COMPLETED },
     isDeleted: false,
   })
@@ -98,6 +100,22 @@ export const findOpenTournamentEntryForTeam = async (
     tournamentId: tournament._id.toString(),
     tournamentName: tournament.name,
   };
+};
+
+export const findTeamDivisionDependency = async (
+  teamId: string | Types.ObjectId,
+  session: ClientSession
+): Promise<'players' | 'tournament_entries' | null> => {
+  if (await Player.exists({ teamId, isDeleted: false }).session(session)) return 'players';
+  if (
+    await TournamentEntry.exists({
+      teamId,
+      isDeleted: false,
+    }).session(session)
+  ) {
+    return 'tournament_entries';
+  }
+  return null;
 };
 
 export const countActivePlayersForTeam = (

@@ -1,5 +1,7 @@
 import mongoose, { ClientSession, QueryFilter } from 'mongoose';
 import Player, { IPlayer } from '@/models/player.model';
+import { ITeam } from '@/models/team.model';
+import { resolveCompetitionDivision } from '@/models/competition-division';
 import { fenceTeamLifecycle } from '@/services/team-lifecycle.service';
 import { hasErrorCode } from '@/utils/http-error.util';
 
@@ -110,10 +112,12 @@ const normalizeActiveRosterSlots = async (
   return plan;
 };
 
-const assertTeamAvailable = async (teamId: string, session: ClientSession): Promise<void> => {
-  if (!(await fenceTeamLifecycle(teamId, session))) {
+const assertTeamAvailable = async (teamId: string, session: ClientSession): Promise<ITeam> => {
+  const team = await fenceTeamLifecycle(teamId, session);
+  if (!team) {
     throw new PlayerRosterError('Invalid or unavailable team ID', 400, 'INVALID_TEAM');
   }
+  return team;
 };
 
 export const createPlayerInAvailableRosterSlot = async (
@@ -189,8 +193,19 @@ export const transferPlayerToAvailableRosterSlot = async (
         transferredPlayer = null;
         destinationRosterIsFull = false;
         // A deterministic order avoids two opposite transfers deadlocking.
+        const fencedTeams = new Map<string, ITeam>();
         for (const teamId of [...new Set([sourceTeamId, destinationTeamId])].sort()) {
-          await assertTeamAvailable(teamId, session);
+          fencedTeams.set(teamId, await assertTeamAvailable(teamId, session));
+        }
+        if (
+          resolveCompetitionDivision(fencedTeams.get(sourceTeamId)?.division) !==
+          resolveCompetitionDivision(fencedTeams.get(destinationTeamId)?.division)
+        ) {
+          throw new PlayerRosterError(
+            'A player cannot be transferred between men’s and women’s teams.',
+            409,
+            'PLAYER_TEAM_DIVISION_MISMATCH'
+          );
         }
         const plan = await normalizeActiveRosterSlots(destinationTeamId, session);
         if (plan.activePlayerCount >= MAX_TEAM_ROSTER_SIZE || !plan.availableSlot) {

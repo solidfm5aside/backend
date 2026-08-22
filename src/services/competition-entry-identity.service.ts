@@ -43,7 +43,10 @@ export const readCompetitionTeamIdentitySummaries = async (
     entryQuery.session(session);
   }
 
-  const [teams, entries] = await Promise.all([teamQuery, entryQuery]);
+  // MongoDB does not support parallel operations on one transaction session.
+  const [teams, entries] = session
+    ? [await teamQuery, await entryQuery]
+    : await Promise.all([teamQuery, entryQuery]);
   const currentById = new Map(teams.map((team) => [team._id.toString(), team]));
   const entryById = new Map(entries.map((entry) => [entry.teamId.toString(), entry]));
   const summaries = new Map<string, CompetitionTeamIdentitySummary>();
@@ -90,8 +93,10 @@ export const refreshOpenCompetitionEntryIdentitySnapshots = async (
     const fenced = await Tournament.findOneAndUpdate(
       {
         _id: tournamentId,
-        formatVersion: 2,
-        format: TournamentFormat.TWO_GROUP_KNOCKOUT,
+        $or: [
+          { formatVersion: 2, format: TournamentFormat.TWO_GROUP_KNOCKOUT },
+          { formatVersion: 3, format: TournamentFormat.SINGLE_TABLE_FINAL },
+        ],
         workflowState: { $ne: CompetitionWorkflowState.COMPLETED },
         isDeleted: false,
       },
@@ -125,8 +130,10 @@ export const completedCompetitionSnapshotReferencesLogo = async (
   logoUrl: string
 ): Promise<boolean> => {
   const completedTournamentIds = await Tournament.find({
-    formatVersion: 2,
-    format: TournamentFormat.TWO_GROUP_KNOCKOUT,
+    $or: [
+      { formatVersion: 2, format: TournamentFormat.TWO_GROUP_KNOCKOUT },
+      { formatVersion: 3, format: TournamentFormat.SINGLE_TABLE_FINAL },
+    ],
     workflowState: CompetitionWorkflowState.COMPLETED,
   }).distinct('_id');
   if (completedTournamentIds.length === 0) return false;

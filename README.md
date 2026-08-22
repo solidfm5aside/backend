@@ -221,6 +221,64 @@ groups, dates, venues, schedule states, and provenance fields is compared with
 the pinned manifest before success is reported. The command never prints the
 MongoDB URI or application secrets.
 
+## Guarded women-team division tagging
+
+`Team.division` and `Tournament.division` are explicit (`men` or `women`). A
+legacy team/tournament with a missing or `null` division is interpreted as men
+at read time; the application does not rewrite those rows. The women format
+accepts only women teams, the men format accepts only effective-men teams, and
+player transfers across divisions are rejected transactionally.
+
+The one-time tagging utility targets only these exact ID/name pairs:
+
+- `6a8a1ec9508de0e7425195a6` — `NYSC WOMEN TEAM`
+- `6a8a1f1f508de0e7425195a7` — `RANGERS INTERNATIONAL WOMEN`
+- `6a8a1ea3508de0e7425195a5` — `ZOHAR FA`
+
+It is dry-run-only by default and must be reviewed before any execution:
+
+```bash
+npm run db:womens-division:plan
+```
+
+The plan fails closed unless all exact targets exist, names and registered
+states match, `isDeleted` is explicitly `false`, the current division is a
+supported legacy/men/women value, and every row that still needs changing has
+no semantically active player or tournament-entry dependency. Missing or
+`null` dependency `isDeleted` fields are treated as active, not deleted.
+
+Before execution, create and independently verify a restorable database backup,
+compute the backup artifact's SHA-256 from its bytes, and retain the artifact
+outside the application deployment. Execution requires all temporary gates,
+the exact connected database name, a safe artifact basename, and the exact
+64-character SHA-256:
+
+```bash
+WOMENS_DIVISION_MIGRATION_ALLOW_EXECUTE=true \
+WOMENS_DIVISION_MIGRATION_BACKUP_VERIFIED=true \
+npm run db:womens-division:migrate -- \
+  --confirm-db=<exact-connected-database-name> \
+  --backup-artifact=<safe-backup-basename> \
+  --backup-sha256=<independently-computed-64-character-sha256>
+```
+
+Production also requires the temporary
+`WOMENS_DIVISION_MIGRATION_ALLOW_PRODUCTION=true` gate. The transaction re-reads
+all three targets and dependencies, acquires exact lifecycle compare-and-set
+fences in deterministic ID order, skips already-women rows without bumping
+their revision, and rechecks dependencies before commit. It prints a structured
+before/fence/after receipt containing only the safe backup basename and SHA;
+capture that output in the deployment record and retain it with the backup.
+The utility never tags any other team and must not be run against the live
+database merely to test it.
+
+If any precondition or post-check fails before commit, the transaction aborts.
+After a successful commit, do not blindly reverse the division fields: first
+stop writes and compare the retained receipt with current player/entry
+dependencies. Restore the independently verified full backup only in an
+approved maintenance window, or apply a separately reviewed conditional CAS
+correction when the exact receipt targets have acquired no incompatible data.
+
 ---
 
 ## 🛠️ API Reference
@@ -332,6 +390,63 @@ Every competition mutation uses `expectedRevision`; stale concurrent changes
 return `409`. Publishing, finalization, draw, and progression operations also
 require an `Idempotency-Key`. MongoDB transactions require Atlas or another
 replica-set deployment.
+
+#### 3-team women single-table workflow (`/:tournamentId/competition`)
+
+Create this separate competition with the explicit fixed format; it does not
+modify or share entries with the men tournament:
+
+```json
+{
+  "name": "Solid FM Women Cup",
+  "season": "2026",
+  "startDate": "2026-09-01T00:00:00.000Z",
+  "formatVersion": 3,
+  "format": "single_table_final",
+  "division": "women"
+}
+```
+
+| Method | Endpoint suffix | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/` | Admin | Read women capabilities, readiness, entries, table progress, final state, and allowed actions |
+| `GET/POST` | `/entries` | Admin | List or enroll exactly three women teams; DTOs expose `tableSlot`, never group fields |
+| `DELETE` | `/entries/:entryId` | Admin | Remove an entry before league publication |
+| `POST` | `/league-fixtures/preview` | Admin | Validate the three physically decided single-leg pairings |
+| `GET` | `/league-fixtures/plan` | Admin | Read the published physical league plan or `not_published` |
+| `POST` | `/league-fixtures/publish` | Admin | Publish the unchanged plan with `planHash` and `Idempotency-Key` |
+| `GET` | `/standings` | Public | Return `{ "table": [...] }` for the single table |
+| `GET` | `/ranking` | Admin | Read ranked rows, current tie bases, and qualification readiness |
+| `PUT` | `/table/tie-resolutions` | Admin | Record the committee order for a current whole-table tie basis |
+| `POST` | `/qualification/finalize` | Admin | Lock all three results and snapshot ranks 1 and 2 |
+| `POST` | `/final/preview` | Admin | Validate the physically decided rank-1 versus rank-2 final schedule |
+| `GET` | `/final/plan` | Admin | Read the durable final plan and linked match |
+| `POST` | `/final/publish` | Admin | Publish the unchanged physical final with `planHash` and `Idempotency-Key` |
+| `POST` | `/knockout/progress` | Admin | Lock a completed final and record champion/runner-up; it creates no round |
+
+The fixed women rules are three teams, one single round-robin leg, two matches
+per team (three league matches total), and ranks 1 and 2 in one final. Ranking
+is points, goal difference, goals scored, completed direct head-to-head for an
+exact two-team tie, then an explicit committee decision. There is no group,
+second leg, random fixture generator, draw, quarter-final, semi-final,
+third-place match, or automatically materialized final.
+
+The league manifest contains official numbers 1–3 exactly once and every
+unordered team pair exactly once. The final is official number 4 with rank 1
+as home and rank 2 as away. Both league and final rows may be published as TBC
+by setting `kickoffAt` and `venue` to `null`; therefore zero configured venues
+does not block an all-TBC publication. A confirmed row must supply both fields,
+use an active venue, and pass global venue/kickoff and team/day collision checks
+across men and women tournaments. A pending match cannot start, accept events,
+or record a winner until Match Centre confirms both schedule fields.
+
+Women workflow states are `setup`, `entries_ready`, `group_stage` (the internal
+workflow state while the public match stage is `league`),
+`qualification_finalized`, `knockout_stage` only after the explicit final is
+published, and `completed`. Qualification locks the league results; after that,
+status reopening and event additions/deletions fail closed. Final publication
+uses a dedicated durable women-final record with qualification-rank sources and
+does not create or alter a men `CompetitionDraw` or `CompetitionBracket`.
 
 ### ⚽ Matches (`/api/v1/matches`)
 | Method | Endpoint | Access | Description |

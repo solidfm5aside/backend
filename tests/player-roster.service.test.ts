@@ -34,6 +34,7 @@ import {
   planActiveRosterSlots,
   transferPlayerToAvailableRosterSlot,
 } from '@/services/player-roster.service';
+import { CompetitionDivision } from '@/models/competition-division';
 
 const mockedPlayer = Player as unknown as jest.Mock & {
   __save: jest.Mock;
@@ -159,6 +160,27 @@ describe('atomic team roster slot allocation', () => {
         { teamId: 'team-2' }
       )
     ).resolves.toEqual({ player: null, rosterIsFull: true });
+    expect(mockedPlayer.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a transfer between men and women teams inside the fenced transaction', async () => {
+    mockedFenceTeamLifecycle
+      .mockResolvedValueOnce({ _id: 'team-1', division: CompetitionDivision.MEN } as never)
+      .mockResolvedValueOnce({
+        _id: 'team-2',
+        division: CompetitionDivision.WOMEN,
+      } as never);
+
+    await expect(
+      transferPlayerToAvailableRosterSlot(
+        { _id: 'player-1', teamId: 'team-1', isDeleted: false },
+        { teamId: 'team-2' }
+      )
+    ).rejects.toMatchObject({
+      code: 'PLAYER_TEAM_DIVISION_MISMATCH',
+      statusCode: 409,
+    });
+    expect(mockedPlayer.find).not.toHaveBeenCalled();
     expect(mockedPlayer.findOneAndUpdate).not.toHaveBeenCalled();
   });
 });

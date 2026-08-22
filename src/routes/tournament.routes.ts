@@ -18,6 +18,13 @@ import {
   resolveCompetitionTieSchema,
   updateCompetitionRulesSchema,
 } from '@/validators/competition.validator';
+import {
+  previewWomensFinalSchema,
+  previewWomensLeagueFixturesSchema,
+  publishWomensFinalSchema,
+  publishWomensLeagueFixturesSchema,
+  resolveWomensTableTieSchema,
+} from '@/validators/womens-competition.validator';
 
 const router = Router();
 
@@ -99,6 +106,29 @@ router.post(
   competitionController.publishFixtures
 );
 router.post(
+  '/:tournamentId/competition/league-fixtures/preview',
+  validateObjectIdParam('tournamentId', 'tournament'),
+  validate(previewWomensLeagueFixturesSchema),
+  competitionController.previewWomensLeagueFixtures
+);
+router.get(
+  '/:tournamentId/competition/league-fixtures/plan',
+  validateObjectIdParam('tournamentId', 'tournament'),
+  competitionController.getWomensLeagueFixturePlan
+);
+router.post(
+  '/:tournamentId/competition/league-fixtures/publish',
+  validateObjectIdParam('tournamentId', 'tournament'),
+  validate(publishWomensLeagueFixturesSchema),
+  competitionController.publishWomensLeagueFixtures
+);
+router.put(
+  '/:tournamentId/competition/table/tie-resolutions',
+  validateObjectIdParam('tournamentId', 'tournament'),
+  validate(resolveWomensTableTieSchema),
+  competitionController.resolveWomensTableTie
+);
+router.post(
   '/:tournamentId/competition/qualification/finalize',
   validateObjectIdParam('tournamentId', 'tournament'),
   validate(competitionMutationSchema),
@@ -127,6 +157,23 @@ router.post(
   validateObjectIdParam('tournamentId', 'tournament'),
   validate(competitionMutationSchema),
   competitionController.progressKnockout
+);
+router.post(
+  '/:tournamentId/competition/final/preview',
+  validateObjectIdParam('tournamentId', 'tournament'),
+  validate(previewWomensFinalSchema),
+  competitionController.previewWomensFinal
+);
+router.get(
+  '/:tournamentId/competition/final/plan',
+  validateObjectIdParam('tournamentId', 'tournament'),
+  competitionController.getWomensFinalPlan
+);
+router.post(
+  '/:tournamentId/competition/final/publish',
+  validateObjectIdParam('tournamentId', 'tournament'),
+  validate(publishWomensFinalSchema),
+  competitionController.publishWomensFinal
 );
 
 router.get('/:id/readiness', tournamentController.checkReadiness);
