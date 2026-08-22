@@ -3,8 +3,6 @@ import {
   buildKnockoutBracketPlan,
   buildStandingRankPersistenceRows,
   buildStandingsRevisionGuard,
-  createRandomDrawPairings,
-  createSeededCrossGroupPairings,
   deriveKnockoutProgression,
   getFirstKnockoutStage,
   getMissingCompetitionDecisions,
@@ -16,21 +14,9 @@ import {
   rankFixedCompetitionGroup,
   rankStandings,
   selectCompetitionTeamIdentity,
-  validateManualDrawPairings,
   validateResolvedKnockoutRound,
   withBracketNodeTeamIdentities,
 } from '@/utils/competition.util';
-
-const qualifiers = [
-  { entryId: 'a1', teamId: 'ta1', groupKey: 'A' as const, rank: 1 },
-  { entryId: 'a2', teamId: 'ta2', groupKey: 'A' as const, rank: 2 },
-  { entryId: 'a3', teamId: 'ta3', groupKey: 'A' as const, rank: 3 },
-  { entryId: 'a4', teamId: 'ta4', groupKey: 'A' as const, rank: 4 },
-  { entryId: 'b1', teamId: 'tb1', groupKey: 'B' as const, rank: 1 },
-  { entryId: 'b2', teamId: 'tb2', groupKey: 'B' as const, rank: 2 },
-  { entryId: 'b3', teamId: 'tb3', groupKey: 'B' as const, rank: 3 },
-  { entryId: 'b4', teamId: 'tb4', groupKey: 'B' as const, rank: 4 },
-];
 
 describe('competition invariants', () => {
   it('keeps every unconfirmed decision visibly blocking', () => {
@@ -91,24 +77,7 @@ describe('competition invariants', () => {
     ).toBe(true);
   });
 
-  it('produces a repeatable constrained random draw using every qualifier once', () => {
-    const first = createRandomDrawPairings(qualifiers, 'saved-seed', true);
-    const second = createRandomDrawPairings(qualifiers, 'saved-seed', true);
-    expect(first).toEqual(second);
-    expect(first.every((pair) => pair.home.groupKey !== pair.away.groupKey)).toBe(true);
-    expect(
-      new Set(first.flatMap((pair) => [pair.home.entryId, pair.away.entryId])).size
-    ).toBe(8);
-  });
-
-  it('validates manual pairings and defines seeded cross-group pairings explicitly', () => {
-    const seeded = createSeededCrossGroupPairings(qualifiers);
-    expect(seeded.map((pair) => `${pair.home.entryId}-${pair.away.entryId}`)).toEqual([
-      'a1-b4',
-      'a2-b3',
-      'b1-a4',
-      'b2-a3',
-    ]);
+  it('defines durable bracket adjacency without selecting any physical pairings', () => {
     const bracket = buildKnockoutBracketPlan(8, false);
     expect(
       bracket
@@ -124,19 +93,6 @@ describe('competition invariants', () => {
         .map((node) => [node.homeSource.sourceNodeKey, node.awaySource.sourceNodeKey])
     ).toEqual([['semi_finals:1', 'semi_finals:2']]);
     expect(bracket.some((node) => node.stage === 'third_place')).toBe(false);
-
-    expect(() =>
-      validateManualDrawPairings(
-        qualifiers,
-        [
-          { homeEntryId: 'a1', awayEntryId: 'b1' },
-          { homeEntryId: 'a1', awayEntryId: 'b2' },
-          { homeEntryId: 'a3', awayEntryId: 'b3' },
-          { homeEntryId: 'a4', awayEntryId: 'b4' },
-        ],
-        true
-      )
-    ).toThrow('cannot appear more than once');
   });
 
   it('uses only a completed direct result to separate a two-team primary tie', () => {

@@ -4,6 +4,8 @@ import Match, {
   IMatch,
   IMatchEvent,
   MatchEventType,
+  MatchFixtureSource,
+  MatchScheduleStatus,
   MatchStage,
   MatchStatus,
 } from '@/models/match.model';
@@ -15,6 +17,7 @@ import Tournament, {
   TournamentFormat,
 } from '@/models/tournament.model';
 import Player from '@/models/player.model';
+import Venue from '@/models/venue.model';
 import TournamentRosterEntry from '@/models/tournament-roster-entry.model';
 import TournamentEntry from '@/models/tournament-entry.model';
 import { broadcastMatchUpdate, broadcastGoal } from '@/sockets/socket';
@@ -32,9 +35,20 @@ import {
   competitionReferenceId,
 } from '@/utils/completed-competition-identity.util';
 import { getNextLegacyStage } from '@/utils/legacy-knockout.util';
+import { competitionLocalCalendarDay } from '@/utils/official-fixture.util';
 
 const isKnockoutMatch = (match: IMatch): boolean =>
   match.stage !== MatchStage.LEAGUE && match.stage !== MatchStage.GROUP_STAGE;
+
+const assertMatchScheduleConfirmed = (match: IMatch): void => {
+  if (
+    match.scheduleStatus !== MatchScheduleStatus.CONFIRMED ||
+    !match.date ||
+    !match.venue
+  ) {
+    throw new Error('Confirm the physical kickoff time and venue before starting this match');
+  }
+};
 
 interface MatchEventInput {
   type: MatchEventType;
@@ -125,10 +139,18 @@ const assertBracketResultEditable = async (
     throw new Error('This result is locked because it has already advanced the bracket');
   }
   if (!match.bracketId || !match.bracketNodeKey) {
-    const tournamentQuery = Tournament.findById(match.tournamentId).select('formatVersion');
+    const tournamentQuery = Tournament.findById(match.tournamentId).select(
+      'formatVersion format'
+    );
     if (session) tournamentQuery.session(session);
     const tournament = await tournamentQuery.lean();
-    if (tournament?.formatVersion === 2) return;
+    if (
+      match.fixtureSource === MatchFixtureSource.PHYSICAL_OFFICIAL ||
+      (tournament?.formatVersion === 2 &&
+        tournament.format === TournamentFormat.TWO_GROUP_KNOCKOUT)
+    ) {
+      throw new Error('This physical knockout match is missing durable bracket metadata');
+    }
     const nextStage = getNextLegacyStage(match.stage);
     if (
       nextStage &&
@@ -147,9 +169,13 @@ const assertBracketResultEditable = async (
   );
   if (session) bracketQuery.session(session);
   const bracket = await bracketQuery;
-  if (!bracket) return;
+  if (!bracket) {
+    throw new Error('This knockout match references a missing durable bracket');
+  }
   const node = bracket.nodes.find((item) => item.key === match.bracketNodeKey);
-  if (!node) return;
+  if (!node) {
+    throw new Error('This knockout match references a missing durable bracket node');
+  }
   if (
     (node.stage === MatchStage.FINAL && bracket.championTeamId) ||
     (node.kind === CompetitionBracketNodeKind.THIRD_PLACE && bracket.thirdPlaceTeamId)
@@ -183,10 +209,13 @@ const assertGroupStageResultEditable = async (
   if (session) tournamentQuery.session(session);
   const tournament = await tournamentQuery.lean();
   if (
-    tournament?.formatVersion === 2 &&
-    tournament.format === TournamentFormat.TWO_GROUP_KNOCKOUT &&
-    tournament.workflowState !== CompetitionWorkflowState.GROUP_STAGE
+    !tournament ||
+    tournament.formatVersion !== 2 ||
+    tournament.format !== TournamentFormat.TWO_GROUP_KNOCKOUT
   ) {
+    throw new Error('This group-stage match references an invalid tournament');
+  }
+  if (tournament.workflowState !== CompetitionWorkflowState.GROUP_STAGE) {
     throw new Error('Group-stage results are locked after qualification is finalized');
   }
 };
@@ -258,6 +287,10 @@ export const updateMatchStatus = async (matchId: string, status: MatchStatus) =>
   const outcome = await runMatchMutationTransaction(async (session) => {
     const existing = await Match.findById(matchId).session(session);
     if (!existing) return { match: null, changed: false };
+
+    if (status === MatchStatus.LIVE || status === MatchStatus.COMPLETED) {
+      assertMatchScheduleConfirmed(existing);
+    }
 
     // A retry of an already-committed status still rebuilds derived state. It
     // can therefore repair data written by an older non-transactional server.
@@ -338,47 +371,148 @@ export const updateMatchStatus = async (matchId: string, status: MatchStatus) =>
   return outcome.match;
 };
 
-export const updateMatchDetails = async (matchId: string, details: { date?: string; venue?: string }) => {
-  const existing = await Match.findById(matchId);
-  if (!existing) return null;
-  if (
-    (existing.status !== MatchStatus.SCHEDULED &&
-      existing.status !== MatchStatus.CANCELLED) ||
-    existing.resultLockedAt
-  ) {
-    throw new Error('Only scheduled or cancelled, unlocked matches can be rescheduled');
-  }
-  const changes: { date?: string; venue?: string } = {};
-  if (details.date !== undefined) changes.date = details.date;
-  if (details.venue !== undefined) changes.venue = details.venue;
-
-  const match = await Match.findOneAndUpdate(
-    {
-      _id: matchId,
-      status: existing.status,
-      __v: existing.__v ?? 0,
-      resultLockedAt: { $exists: false },
-    },
-    { $set: changes, $inc: { __v: 1 } },
-    { new: true, runValidators: true }
-  ).populate('homeTeam awayTeam', 'name logo')
-   .populate('events.playerId', 'name')
-   .populate('events.assistPlayerId', 'name');
-
-  if (!match) {
-    const current = await Match.findById(matchId).select('status resultLockedAt');
-    if (!current) return null;
+export const updateMatchDetails = async (
+  matchId: string,
+  details: { date: string | null; venue: string | null }
+) => {
+  const outcome = await runMatchMutationTransaction(async (session) => {
+    const existing = await Match.findById(matchId).session(session);
+    if (!existing) return { match: null, changed: false };
     if (
-      (current.status !== MatchStatus.SCHEDULED &&
-        current.status !== MatchStatus.CANCELLED) ||
-      current.resultLockedAt
+      (existing.status !== MatchStatus.SCHEDULED &&
+        existing.status !== MatchStatus.CANCELLED) ||
+      existing.resultLockedAt
     ) {
       throw new Error('Only scheduled or cancelled, unlocked matches can be rescheduled');
     }
-    throw new Error('Match state changed during this update. Refresh and retry.');
-  }
-  broadcastMatchUpdate(matchId, match);
-  return match;
+    if ((details.date === null) !== (details.venue === null)) {
+      throw new Error('Kickoff time and venue must both be set or both be pending');
+    }
+
+    let kickoffAt: Date | undefined;
+    let canonicalVenue: string | undefined;
+    if (details.date !== null && details.venue !== null) {
+      kickoffAt = new Date(details.date);
+      if (Number.isNaN(kickoffAt.getTime())) {
+        throw new Error('A valid kickoff time is required');
+      }
+      const venues = await Venue.find({ isDeleted: false })
+        .select('name __v')
+        .session(session)
+        .lean();
+      const selectedVenue = venues.find(
+        (venue) =>
+          venue.name.trim().toLocaleLowerCase() ===
+          details.venue!.trim().toLocaleLowerCase()
+      );
+      canonicalVenue = selectedVenue?.name;
+      if (!selectedVenue || !canonicalVenue) {
+        throw new Error('A confirmed match must use an active venue');
+      }
+      const venueFence = await Venue.updateOne(
+        {
+          _id: selectedVenue._id,
+          name: selectedVenue.name,
+          isDeleted: false,
+          __v: selectedVenue.__v ?? 0,
+        },
+        { $inc: { __v: 1 } },
+        { session }
+      );
+      if (venueFence.modifiedCount !== 1) {
+        throw new Error('The selected venue changed during scheduling. Refresh and retry.');
+      }
+
+      const otherConfirmedMatches = await Match.find({
+        _id: { $ne: existing._id },
+        tournamentId: existing.tournamentId,
+        isDeleted: false,
+        scheduleStatus: MatchScheduleStatus.CONFIRMED,
+        date: { $exists: true },
+      })
+        .select('homeTeam awayTeam date venue')
+        .session(session)
+        .lean();
+      const requestedDay = competitionLocalCalendarDay(kickoffAt);
+      const participantIds = new Set([
+        existing.homeTeam.toString(),
+        existing.awayTeam.toString(),
+      ]);
+      for (const other of otherConfirmedMatches) {
+        if (!other.date) continue;
+        if (
+          other.venue?.trim().toLocaleLowerCase() ===
+            canonicalVenue.toLocaleLowerCase() &&
+          other.date.getTime() === kickoffAt.getTime()
+        ) {
+          throw new Error('Another match already uses this venue at the requested kickoff');
+        }
+        const sharesTeam =
+          participantIds.has(other.homeTeam.toString()) ||
+          participantIds.has(other.awayTeam.toString());
+        if (sharesTeam && competitionLocalCalendarDay(other.date) === requestedDay) {
+          throw new Error('A team cannot play more than once on the same local calendar day');
+        }
+      }
+    }
+
+    const fenced = await Tournament.updateOne(
+      { _id: existing.tournamentId, isDeleted: false },
+      { $inc: { scheduleRevision: 1 } },
+      { session }
+    );
+    if (fenced.modifiedCount !== 1) {
+      throw new Error('The match references an unavailable tournament');
+    }
+
+    const update =
+      kickoffAt && canonicalVenue
+        ? {
+            $set: {
+              date: kickoffAt,
+              venue: canonicalVenue,
+              scheduleStatus: MatchScheduleStatus.CONFIRMED,
+            },
+            $inc: { __v: 1 },
+          }
+        : {
+            $set: { scheduleStatus: MatchScheduleStatus.PENDING },
+            $unset: { date: 1, venue: 1 },
+            $inc: { __v: 1 },
+          };
+    const match = await Match.findOneAndUpdate(
+      {
+        _id: matchId,
+        status: existing.status,
+        __v: existing.__v ?? 0,
+        resultLockedAt: { $exists: false },
+      },
+      update,
+      { new: true, runValidators: true, session }
+    )
+      .populate('homeTeam awayTeam', 'name logo')
+      .populate('events.playerId', 'name')
+      .populate('events.assistPlayerId', 'name');
+
+    if (!match) {
+      const current = await Match.findById(matchId)
+        .select('status resultLockedAt')
+        .session(session);
+      if (!current) return { match: null, changed: false };
+      if (
+        (current.status !== MatchStatus.SCHEDULED &&
+          current.status !== MatchStatus.CANCELLED) ||
+        current.resultLockedAt
+      ) {
+        throw new Error('Only scheduled or cancelled, unlocked matches can be rescheduled');
+      }
+      throw new Error('Match schedule changed during this update. Refresh and retry.');
+    }
+    return { match, changed: true };
+  });
+
+  if (outcome.changed && outcome.match) broadcastMatchUpdate(matchId, outcome.match);
+  return outcome.match;
 };
 
 export const addMatchEvent = async (
@@ -390,6 +524,7 @@ export const addMatchEvent = async (
   const outcome = await runMatchMutationTransaction(async (session) => {
     const match = await loadMatchMutationState(matchId, session);
     if (!match) throw new Error('Match not found');
+    assertMatchScheduleConfirmed(match);
 
     if (operationKey) {
       const existingEvent = match.events.find((item) => item.operationKey === operationKey);
@@ -407,7 +542,6 @@ export const addMatchEvent = async (
         };
       }
     }
-
     if (match.status !== MatchStatus.LIVE && match.status !== MatchStatus.COMPLETED) {
       throw new Error('Start the match before recording events');
     }
@@ -545,7 +679,7 @@ export const getMatches = async (filter: MatchListFilter = {}) => {
     .populate('winner', 'name logo')
     .populate('events.playerId', 'name')
     .populate('events.assistPlayerId', 'name')
-    .sort({ date: 1 })
+    .sort({ scheduleStatus: 1, date: 1, officialFixtureNumber: 1, _id: 1 })
     .lean();
 
   if (matches.length === 0) return matches;
@@ -612,6 +746,7 @@ export const updateMatchWinner = async (
     if (existing.stage === MatchStage.LEAGUE || existing.stage === MatchStage.GROUP_STAGE) {
       throw new Error('A winner can only be set for a knockout match');
     }
+    assertMatchScheduleConfirmed(existing);
 
     const storedShootout = existing.shootoutScore;
     const sameShootout = shootoutScore

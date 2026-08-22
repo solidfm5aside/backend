@@ -191,18 +191,6 @@ export const withBracketNodeTeamIdentities = <T extends object>(
 ): (T & typeof identities) | null =>
   match ? { ...match, ...identities } : null;
 
-export interface DrawEntryLike {
-  entryId: string;
-  teamId: string;
-  groupKey: 'A' | 'B';
-  rank: number;
-}
-
-export interface DrawPairingLike {
-  home: DrawEntryLike;
-  away: DrawEntryLike;
-}
-
 export type KnockoutStageLike =
   | 'round_of_16'
   | 'quarter_finals'
@@ -820,119 +808,6 @@ export const hasUnresolvedQualificationTie = <T extends ComparableStanding>(
       tieBreakers
     ) === 0
   );
-};
-
-const createSeededRandom = (seed: string): (() => number) => {
-  let state = 2166136261;
-  for (let index = 0; index < seed.length; index++) {
-    state ^= seed.charCodeAt(index);
-    state = Math.imul(state, 16777619);
-  }
-
-  return () => {
-    state += 0x6d2b79f5;
-    let value = state;
-    value = Math.imul(value ^ (value >>> 15), value | 1);
-    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
-    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
-  };
-};
-
-export const deterministicShuffle = <T>(values: T[], seed: string): T[] => {
-  const random = createSeededRandom(seed);
-  const shuffled = [...values];
-  for (let index = shuffled.length - 1; index > 0; index--) {
-    const swapIndex = Math.floor(random() * (index + 1));
-    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
-  }
-  return shuffled;
-};
-
-const pairWithConstraint = (
-  remaining: DrawEntryLike[],
-  avoidSameGroup: boolean
-): DrawPairingLike[] | null => {
-  if (remaining.length === 0) return [];
-  const [home, ...rest] = remaining;
-
-  for (let index = 0; index < rest.length; index++) {
-    const away = rest[index];
-    if (avoidSameGroup && home.groupKey === away.groupKey) continue;
-
-    const next = [...rest.slice(0, index), ...rest.slice(index + 1)];
-    const tail = pairWithConstraint(next, avoidSameGroup);
-    if (tail) return [{ home, away }, ...tail];
-  }
-
-  return null;
-};
-
-export const createRandomDrawPairings = (
-  entries: DrawEntryLike[],
-  seed: string,
-  avoidSameGroup: boolean
-): DrawPairingLike[] => {
-  if (entries.length === 0 || entries.length % 2 !== 0) {
-    throw new Error('A knockout draw requires a non-zero even number of qualifiers.');
-  }
-  const shuffled = deterministicShuffle(entries, seed);
-  const pairings = pairWithConstraint(shuffled, avoidSameGroup);
-  if (!pairings) throw new Error('No valid draw satisfies the configured constraints.');
-  return pairings;
-};
-
-export const createSeededCrossGroupPairings = (
-  entries: DrawEntryLike[]
-): DrawPairingLike[] => {
-  const groupA = entries.filter((entry) => entry.groupKey === 'A').sort((a, b) => a.rank - b.rank);
-  const groupB = entries.filter((entry) => entry.groupKey === 'B').sort((a, b) => a.rank - b.rank);
-  if (groupA.length !== 4 || groupB.length !== 4) {
-    throw new Error('The fixed v2 seeded draw requires four qualifiers from each group.');
-  }
-  const expectedRanks = [1, 2, 3, 4];
-  if (
-    groupA.some((entry, index) => entry.rank !== expectedRanks[index]) ||
-    groupB.some((entry, index) => entry.rank !== expectedRanks[index])
-  ) {
-    throw new Error('The fixed v2 seeded draw requires unique group ranks 1 through 4.');
-  }
-  return [
-    { home: groupA[0], away: groupB[3] },
-    { home: groupA[1], away: groupB[2] },
-    { home: groupB[0], away: groupA[3] },
-    { home: groupB[1], away: groupA[2] },
-  ];
-};
-
-export const validateManualDrawPairings = (
-  entries: DrawEntryLike[],
-  requestedPairs: Array<{ homeEntryId: string; awayEntryId: string }>,
-  avoidSameGroup: boolean
-): DrawPairingLike[] => {
-  if (requestedPairs.length !== entries.length / 2) {
-    throw new Error('Manual draw must pair every qualifier exactly once.');
-  }
-
-  const byId = new Map(entries.map((entry) => [entry.entryId, entry]));
-  const used = new Set<string>();
-
-  const pairings = requestedPairs.map((pair) => {
-    const home = byId.get(pair.homeEntryId);
-    const away = byId.get(pair.awayEntryId);
-    if (!home || !away) throw new Error('Manual draw contains an unknown qualifier.');
-    if (home.entryId === away.entryId || used.has(home.entryId) || used.has(away.entryId)) {
-      throw new Error('A qualifier cannot appear more than once in a draw.');
-    }
-    if (avoidSameGroup && home.groupKey === away.groupKey) {
-      throw new Error('Manual draw violates the same-group restriction.');
-    }
-    used.add(home.entryId);
-    used.add(away.entryId);
-    return { home, away };
-  });
-
-  if (used.size !== entries.length) throw new Error('Manual draw does not use every qualifier.');
-  return pairings;
 };
 
 export const getFirstKnockoutStage = (

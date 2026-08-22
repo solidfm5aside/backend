@@ -13,10 +13,20 @@ export const addMatchEventSchema = z.object({
   details: z.string().trim().max(500).optional(),
 });
 
-export const updateMatchDetailsSchema = z.object({
-  date: z.string().datetime().optional(),
-  venue: z.string().trim().min(1).max(150).optional(),
-});
+export const updateMatchDetailsSchema = z
+  .object({
+    date: z.string().datetime({ offset: true }).nullable(),
+    venue: z.string().trim().min(1).max(150).nullable(),
+  })
+  .strict()
+  .superRefine((details, context) => {
+    if ((details.date === null) !== (details.venue === null)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'date and venue must both be set or both be null',
+      });
+    }
+  });
 
 export const updateMatchWinnerSchema = z.object({
   winnerId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid winner ID'),

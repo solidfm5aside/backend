@@ -1,6 +1,6 @@
 import mongoose, { Document, Schema } from 'mongoose';
 import { CompetitionDrawMode } from './tournament.model';
-import { MatchStage } from './match.model';
+import { MatchScheduleStatus, MatchStage } from './match.model';
 
 export enum CompetitionDrawType {
   GROUP_ASSIGNMENT = 'group_assignment',
@@ -26,6 +26,9 @@ export interface IDrawPairing {
   awayEntryId: mongoose.Types.ObjectId;
   homeTeamId: mongoose.Types.ObjectId;
   awayTeamId: mongoose.Types.ObjectId;
+  kickoffAt?: Date;
+  venue?: string;
+  scheduleStatus: MatchScheduleStatus;
 }
 
 export interface ICompetitionDraw extends Document {
@@ -38,6 +41,8 @@ export interface ICompetitionDraw extends Document {
   randomSeed?: string;
   inputSnapshot: IDrawInputEntry[];
   pairings: IDrawPairing[];
+  planHash: string;
+  sourceReference?: string;
   rulesSnapshot: Record<string, unknown>;
   createdBy?: mongoose.Types.ObjectId;
   publishedBy?: mongoose.Types.ObjectId;
@@ -61,6 +66,13 @@ const drawPairingSchema = new Schema<IDrawPairing>(
     awayEntryId: { type: Schema.Types.ObjectId, ref: 'TournamentEntry', required: true },
     homeTeamId: { type: Schema.Types.ObjectId, ref: 'Team', required: true },
     awayTeamId: { type: Schema.Types.ObjectId, ref: 'Team', required: true },
+    kickoffAt: Date,
+    venue: { type: String, trim: true, maxlength: 150 },
+    scheduleStatus: {
+      type: String,
+      enum: Object.values(MatchScheduleStatus),
+      required: true,
+    },
   },
   { _id: false }
 );
@@ -84,6 +96,13 @@ const competitionDrawSchema = new Schema<ICompetitionDraw>(
     randomSeed: String,
     inputSnapshot: { type: [drawInputEntrySchema], required: true },
     pairings: { type: [drawPairingSchema], required: true },
+    planHash: {
+      type: String,
+      required: true,
+      match: /^[0-9a-f]{64}$/,
+      lowercase: true,
+    },
+    sourceReference: { type: String, trim: true, maxlength: 200 },
     rulesSnapshot: { type: Schema.Types.Mixed, required: true },
     createdBy: { type: Schema.Types.ObjectId, ref: 'Admin' },
     publishedBy: { type: Schema.Types.ObjectId, ref: 'Admin' },
@@ -95,6 +114,20 @@ const competitionDrawSchema = new Schema<ICompetitionDraw>(
 competitionDrawSchema.index(
   { tournamentId: 1, type: 1, stage: 1, version: 1 },
   { unique: true, name: 'draw_version_unique' }
+);
+
+competitionDrawSchema.path('pairings').validate(
+  (pairings: IDrawPairing[]) =>
+    pairings.every((pairing) => {
+      const hasKickoff = pairing.kickoffAt instanceof Date;
+      const hasVenue = Boolean(pairing.venue?.trim());
+      return (
+        hasKickoff === hasVenue &&
+        pairing.scheduleStatus ===
+          (hasKickoff ? MatchScheduleStatus.CONFIRMED : MatchScheduleStatus.PENDING)
+      );
+    }),
+  'Physical draw schedules must be either fully confirmed or fully pending'
 );
 competitionDrawSchema.index(
   { tournamentId: 1, type: 1, stage: 1 },

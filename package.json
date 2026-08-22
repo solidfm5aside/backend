@@ -12,7 +12,9 @@
     "db:cleanup:inventory": "ts-node -r tsconfig-paths/register src/scripts/cleanup-db.ts",
     "db:cleanup": "ts-node -r tsconfig-paths/register src/scripts/cleanup-db.ts --execute",
     "db:indexes:inventory": "ts-node -r tsconfig-paths/register src/scripts/sync-empty-reset-indexes.ts",
-    "db:indexes:sync": "ts-node -r tsconfig-paths/register src/scripts/sync-empty-reset-indexes.ts --execute"
+    "db:indexes:sync": "ts-node -r tsconfig-paths/register src/scripts/sync-empty-reset-indexes.ts --execute",
+    "db:official-2026:plan": "ts-node -r tsconfig-paths/register src/scripts/migrate-official-2026-fixtures.ts",
+    "db:official-2026:migrate": "ts-node -r tsconfig-paths/register src/scripts/migrate-official-2026-fixtures.ts --execute"
   },
   "keywords": [],
   "author": "",

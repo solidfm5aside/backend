@@ -7,6 +7,16 @@ export enum MatchStatus {
   CANCELLED = 'cancelled',
 }
 
+export enum MatchScheduleStatus {
+  CONFIRMED = 'confirmed',
+  PENDING = 'pending',
+}
+
+export enum MatchFixtureSource {
+  SYSTEM_LEGACY = 'system_legacy',
+  PHYSICAL_OFFICIAL = 'physical_official',
+}
+
 export enum MatchEventType {
   GOAL = 'goal',
   YELLOW_CARD = 'yellow_card',
@@ -43,13 +53,20 @@ export interface IMatch extends Document {
   awayTeam: mongoose.Types.ObjectId;
   homeScore: number;
   awayScore: number;
-  date: Date;
+  date?: Date;
   status: MatchStatus;
   stage: MatchStage;
   round?: number;
   groupKey?: 'A' | 'B';
   leg?: number;
   fixtureKey?: string;
+  officialFixtureNumber?: number;
+  scheduleStatus: MatchScheduleStatus;
+  fixtureSource?: MatchFixtureSource;
+  fixturePublicationHash?: string;
+  fixtureSourceReference?: string;
+  fixturePublishedBy?: mongoose.Types.ObjectId;
+  fixturePublishedAt?: Date;
   drawId?: mongoose.Types.ObjectId;
   bracketId?: mongoose.Types.ObjectId;
   bracketNodeKey?: string;
@@ -130,6 +147,11 @@ const matchSchema = new Schema<IMatch>(
     },
     date: {
       type: Date,
+    },
+    scheduleStatus: {
+      type: String,
+      enum: Object.values(MatchScheduleStatus),
+      default: MatchScheduleStatus.CONFIRMED,
       required: true,
     },
     status: {
@@ -156,6 +178,29 @@ const matchSchema = new Schema<IMatch>(
       type: String,
       trim: true,
     },
+    officialFixtureNumber: {
+      type: Number,
+      min: 1,
+    },
+    fixtureSource: {
+      type: String,
+      enum: Object.values(MatchFixtureSource),
+    },
+    fixturePublicationHash: {
+      type: String,
+      match: /^[0-9a-f]{64}$/,
+      lowercase: true,
+    },
+    fixtureSourceReference: {
+      type: String,
+      trim: true,
+      maxlength: 200,
+    },
+    fixturePublishedBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'Admin',
+    },
+    fixturePublishedAt: Date,
     drawId: {
       type: Schema.Types.ObjectId,
       ref: 'CompetitionDraw',
@@ -212,6 +257,25 @@ const matchSchema = new Schema<IMatch>(
   }
 );
 
+matchSchema.pre('validate', function validatePhysicalFixtureMetadata() {
+  if (this.fixtureSource !== MatchFixtureSource.PHYSICAL_OFFICIAL) return;
+  const hasDate = this.date instanceof Date;
+  const hasVenue = Boolean(this.venue?.trim());
+  const expectedScheduleStatus = hasDate
+    ? MatchScheduleStatus.CONFIRMED
+    : MatchScheduleStatus.PENDING;
+  if (
+    hasDate !== hasVenue ||
+    this.scheduleStatus !== expectedScheduleStatus ||
+    !this.officialFixtureNumber ||
+    !this.fixturePublicationHash
+  ) {
+    throw new Error(
+      'A physical official fixture requires valid publication metadata and a fully confirmed or fully pending schedule'
+    );
+  }
+});
+
 // Indexes
 matchSchema.index({ tournamentId: 1, date: 1 });
 matchSchema.index({ homeTeam: 1 });
@@ -225,6 +289,17 @@ matchSchema.index(
   }
 );
 matchSchema.index({ tournamentId: 1, stage: 1, groupKey: 1, leg: 1, round: 1 });
+matchSchema.index(
+  { tournamentId: 1, officialFixtureNumber: 1 },
+  {
+    unique: true,
+    name: 'official_fixture_number_unique',
+    partialFilterExpression: {
+      isDeleted: false,
+      officialFixtureNumber: { $type: 'number' },
+    },
+  }
+);
 matchSchema.index(
   { tournamentId: 1, bracketNodeKey: 1 },
   {

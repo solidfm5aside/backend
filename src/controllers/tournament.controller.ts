@@ -1,7 +1,6 @@
 import { Request, Response } from 'express';
 import * as tournamentService from '@/services/tournament.service';
 import logger from '@/utils/logger';
-import type { AuthRequest } from '@/middleware/auth.middleware';
 import { getErrorMessage } from '@/utils/http-error.util';
 
 export const createTournament = async (req: Request, res: Response) => {
@@ -65,48 +64,6 @@ export const checkReadiness = async (req: Request, res: Response) => {
     res.status(400).json({
       success: false,
       message: getErrorMessage(error, 'Failed to check readiness'),
-    });
-  }
-};
-
-export const generateFixtures = async (req: AuthRequest, res: Response) => {
-  try {
-    const { tournamentId } = req.params;
-    const { numRounds, matchesPerDay } = req.body;
-    if (typeof tournamentId !== 'string') {
-      return res.status(400).json({ success: false, message: 'Invalid tournament ID' });
-    }
-
-    const matches = await tournamentService.generateTournamentFixtures(
-      tournamentId,
-      numRounds ? parseInt(numRounds) : 6,
-      matchesPerDay ? parseInt(matchesPerDay) : 7
-    );
-    res.status(200).json({ success: true, data: matches });
-  } catch (error: unknown) {
-    logger.error('Generate Fixtures Error:', error);
-    res.status(500).json({
-      success: false,
-      message: getErrorMessage(error, 'Failed to generate fixtures'),
-    });
-  }
-};
-
-export const generateKnockout = async (req: AuthRequest, res: Response) => {
-  try {
-    const { tournamentId } = req.params;
-    const { stage } = req.body;
-    if (typeof tournamentId !== 'string') {
-      return res.status(400).json({ success: false, message: 'Invalid tournament ID' });
-    }
-
-    const matches = await tournamentService.generateKnockoutFixtures(tournamentId, stage);
-    res.status(200).json({ success: true, data: matches });
-  } catch (error: unknown) {
-    logger.error('Generate Knockout Error:', error);
-    res.status(500).json({
-      success: false,
-      message: getErrorMessage(error, 'Failed to generate knockout fixtures'),
     });
   }
 };

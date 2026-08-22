@@ -103,11 +103,22 @@ export const previewFixtures = async (req: AuthRequest, res: Response) => {
   try {
     const data = await competitionService.previewGroupFixtures(
       tournamentIdFrom(req),
-      req.body.matchesPerDay
+      req.body
     );
     res.status(200).json({ success: true, data });
   } catch (error) {
     sendError(res, error, 'Preview Competition Fixtures Error');
+  }
+};
+
+export const getFixturePlan = async (req: AuthRequest, res: Response) => {
+  try {
+    const data = await competitionService.getPublishedGroupFixturePlan(
+      tournamentIdFrom(req)
+    );
+    res.status(200).json({ success: true, data });
+  } catch (error) {
+    sendError(res, error, 'Get Official Competition Fixtures Error');
   }
 };
 
@@ -116,6 +127,7 @@ export const publishFixtures = async (req: AuthRequest, res: Response) => {
     const result = await competitionService.publishGroupFixtures(
       tournamentIdFrom(req),
       req.body,
+      adminIdFrom(req),
       idempotencyKeyFrom(req)
     );
     res.setHeader('Idempotent-Replayed', String(result.replayed));
@@ -215,11 +227,12 @@ export const progressKnockout = async (req: AuthRequest, res: Response) => {
     const result = await competitionService.progressKnockout(
       tournamentIdFrom(req),
       req.body.expectedRevision,
+      adminIdFrom(req),
       idempotencyKeyFrom(req)
     );
     res.setHeader('Idempotent-Replayed', String(result.replayed));
     const statusCode =
-      !result.replayed && result.data.action === 'round_materialized' ? 201 : 200;
+      !result.replayed && result.data.action === 'round_advanced' ? 201 : 200;
     res.status(statusCode).json({ success: true, data: result.data });
   } catch (error) {
     sendError(res, error, 'Progress Knockout Error');

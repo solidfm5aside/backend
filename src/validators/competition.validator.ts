@@ -22,8 +22,8 @@ export const updateCompetitionRulesSchema = z
         z.literal(CompetitionTieBreaker.COMMITTEE_DECISION),
       ])
       .optional(),
-    drawMode: z.literal(CompetitionDrawMode.SEEDED_CROSS_GROUP).optional(),
-    avoidSameGroupFirstRound: z.literal(true).optional(),
+    drawMode: z.literal(CompetitionDrawMode.MANUAL).optional(),
+    avoidSameGroupFirstRound: z.literal(false).optional(),
     thirdPlaceMatch: z.literal(false).optional(),
     maxRosterPlayers: z.literal(10).optional(),
   })
@@ -51,17 +51,76 @@ export const assignCompetitionGroupsSchema = z.object({
     .length(14, 'Exactly 14 complete group assignments are required'),
 });
 
-export const previewGroupFixturesSchema = z.object({
-  matchesPerDay: z.number().int().min(3).max(28).optional().default(7),
-});
+const physicalScheduleFields = z
+  .object({
+    kickoffAt: z.string().datetime({ offset: true }).nullable(),
+    venue: z.string().trim().min(1).max(150).nullable(),
+  })
+  .superRefine((schedule, context) => {
+    if ((schedule.kickoffAt === null) !== (schedule.venue === null)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'kickoffAt and venue must both be set or both be null',
+      });
+    }
+  });
 
-export const publishGroupFixturesSchema = z.object({
-  expectedRevision,
+const officialGroupFixtureSchema = z
+  .object({
+    officialNumber: z.number().int().min(1).max(42),
+    groupKey: z.enum(['A', 'B']),
+    homeEntryId: objectId,
+    awayEntryId: objectId,
+    kickoffAt: z.string().datetime({ offset: true }).nullable(),
+    venue: z.string().trim().min(1).max(150).nullable(),
+  })
+  .strict()
+  .superRefine((fixture, context) => {
+    if ((fixture.kickoffAt === null) !== (fixture.venue === null)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'kickoffAt and venue must both be set or both be null',
+      });
+    }
+  });
+
+export const previewGroupFixturesSchema = z
+  .object({
+    expectedRevision,
+    sourceReference: z.string().trim().min(1).max(200).optional(),
+    fixtures: z.array(officialGroupFixtureSchema).length(42),
+  })
+  .strict();
+
+export const publishGroupFixturesSchema = previewGroupFixturesSchema.extend({
   planHash: z.string().regex(/^[0-9a-f]{64}$/i, 'Invalid fixture plan hash'),
-  matchesPerDay: z.number().int().min(3).max(28).optional().default(7),
 });
 
-export const createCompetitionDrawSchema = z.object({ expectedRevision }).strict();
+const physicalDrawPairingSchema = z
+  .object({
+    slot: z.number().int().min(1).max(4),
+    homeEntryId: objectId,
+    awayEntryId: objectId,
+    kickoffAt: physicalScheduleFields.shape.kickoffAt,
+    venue: physicalScheduleFields.shape.venue,
+  })
+  .strict()
+  .superRefine((pairing, context) => {
+    if ((pairing.kickoffAt === null) !== (pairing.venue === null)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'kickoffAt and venue must both be set or both be null',
+      });
+    }
+  });
+
+export const createCompetitionDrawSchema = z
+  .object({
+    expectedRevision,
+    sourceReference: z.string().trim().min(1).max(200).optional(),
+    pairings: z.array(physicalDrawPairingSchema).length(4),
+  })
+  .strict();
 
 export const publishCompetitionDrawSchema = z.object({
   expectedRevision,

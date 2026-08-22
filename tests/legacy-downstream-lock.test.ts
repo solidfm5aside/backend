@@ -7,7 +7,11 @@ jest.mock('@/services/standings.service', () => ({
   recalculateTournamentStats: jest.fn(),
 }));
 
-import Match, { MatchStage, MatchStatus } from '@/models/match.model';
+import Match, {
+  MatchScheduleStatus,
+  MatchStage,
+  MatchStatus,
+} from '@/models/match.model';
 import Tournament, { TournamentFormat } from '@/models/tournament.model';
 import { updateMatchStatus } from '@/services/match.service';
 import mongoose from 'mongoose';
@@ -28,6 +32,9 @@ describe('legacy downstream result locks', () => {
       tournamentId: 'tournament-1',
       stage: MatchStage.PLAYOFF,
       status: MatchStatus.COMPLETED,
+      scheduleStatus: MatchScheduleStatus.CONFIRMED,
+      date: new Date('2025-01-01T12:00:00.000Z'),
+      venue: 'Legacy Ground',
       resultLockedAt: undefined,
       bracketId: undefined,
       bracketNodeKey: undefined,

@@ -12,10 +12,13 @@ import mongoose, { Types } from 'mongoose';
 import Match, {
   IMatchEvent,
   MatchEventType,
+  MatchFixtureSource,
+  MatchScheduleStatus,
   MatchStage,
   MatchStatus,
 } from '@/models/match.model';
 import Player from '@/models/player.model';
+import Venue from '@/models/venue.model';
 import Tournament, { TournamentFormat } from '@/models/tournament.model';
 import CompetitionBracket, {
   CompetitionBracketNodeKind,
@@ -24,6 +27,7 @@ import CompetitionBracket, {
 import {
   addMatchEvent,
   deleteMatchEvent,
+  updateMatchDetails,
   updateMatchStatus,
   updateMatchWinner,
 } from '@/services/match.service';
@@ -66,6 +70,9 @@ const buildMatch = (overrides: Record<string, unknown> = {}) => ({
   awayTeam: new Types.ObjectId(),
   homeScore: 0,
   awayScore: 0,
+  date: new Date('2026-08-23T11:00:00.000Z'),
+  venue: 'Solid FM Arena',
+  scheduleStatus: MatchScheduleStatus.CONFIRMED,
   status: MatchStatus.LIVE,
   stage: MatchStage.LEAGUE,
   events: [] as IMatchEvent[],
@@ -101,6 +108,95 @@ describe('transactional match mutations and derived statistics', () => {
       addMatchEvent(new Types.ObjectId().toString(), event, 'x'.repeat(201))
     ).rejects.toThrow(/at most 200 characters/i);
     expect(startSession).not.toHaveBeenCalled();
+  });
+
+  it('blocks live status, events, and knockout winners while a physical schedule is pending', async () => {
+    const session = buildSession();
+    jest.spyOn(mongoose, 'startSession').mockResolvedValue(session as never);
+    const findById = jest.spyOn(Match, 'findById');
+    const pending = buildMatch({
+      status: MatchStatus.SCHEDULED,
+      stage: MatchStage.QUARTER_FINALS,
+      fixtureSource: MatchFixtureSource.PHYSICAL_OFFICIAL,
+      scheduleStatus: MatchScheduleStatus.PENDING,
+      date: undefined,
+      venue: undefined,
+    });
+
+    findById.mockReturnValueOnce(queryResult(pending) as never);
+    await expect(updateMatchStatus(pending._id.toString(), MatchStatus.LIVE)).rejects.toThrow(
+      /confirm the physical kickoff time and venue/i
+    );
+
+    findById.mockReturnValueOnce(queryResult(pending) as never);
+    await expect(
+      addMatchEvent(
+        pending._id.toString(),
+        {
+          type: MatchEventType.YELLOW_CARD,
+          minute: 1,
+          playerId: new Types.ObjectId(),
+          teamId: pending.homeTeam,
+        },
+        'pending-event'
+      )
+    ).rejects.toThrow(/confirm the physical kickoff time and venue/i);
+
+    findById.mockReturnValueOnce(queryResult(pending) as never);
+    await expect(
+      updateMatchWinner(pending._id.toString(), pending.homeTeam.toString(), false)
+    ).rejects.toThrow(/confirm the physical kickoff time and venue/i);
+
+    expect(mockedRecalculate).not.toHaveBeenCalled();
+    expect(mockedBroadcastUpdate).not.toHaveBeenCalled();
+  });
+
+  it('fences the active venue version before confirming a physical schedule', async () => {
+    const session = buildSession();
+    jest.spyOn(mongoose, 'startSession').mockResolvedValue(session as never);
+    const existing = buildMatch({
+      status: MatchStatus.SCHEDULED,
+      scheduleStatus: MatchScheduleStatus.PENDING,
+      date: undefined,
+      venue: undefined,
+      __v: 2,
+    });
+    jest.spyOn(Match, 'findById').mockReturnValue(queryResult(existing) as never);
+    const venueId = new Types.ObjectId();
+    jest.spyOn(Venue, 'find').mockReturnValue(
+      queryResult([{ _id: venueId, name: 'Eclipse Arena', __v: 4 }]) as never
+    );
+    const venueFence = jest
+      .spyOn(Venue, 'updateOne')
+      .mockResolvedValue({ modifiedCount: 1 } as never);
+    jest.spyOn(Match, 'find').mockReturnValue(queryResult([]) as never);
+    jest.spyOn(Tournament, 'updateOne').mockResolvedValue({ modifiedCount: 1 } as never);
+    const responseMatch = buildMatch({
+      ...existing,
+      date: new Date('2026-09-01T11:00:00.000Z'),
+      venue: 'Eclipse Arena',
+      scheduleStatus: MatchScheduleStatus.CONFIRMED,
+      __v: 3,
+    });
+    jest
+      .spyOn(Match, 'findOneAndUpdate')
+      .mockReturnValue(queryResult(responseMatch) as never);
+
+    await expect(
+      updateMatchDetails(existing._id.toString(), {
+        date: '2026-09-01T12:00:00+01:00',
+        venue: 'eclipse arena',
+      })
+    ).resolves.toBe(responseMatch);
+    expect(venueFence).toHaveBeenCalledWith(
+      { _id: venueId, name: 'Eclipse Arena', isDeleted: false, __v: 4 },
+      { $inc: { __v: 1 } },
+      { session }
+    );
+    expect(mockedBroadcastUpdate).toHaveBeenCalledWith(
+      existing._id.toString(),
+      responseMatch
+    );
   });
 
   it('propagates a rebuild failure without broadcasting, then applies one event on retry', async () => {

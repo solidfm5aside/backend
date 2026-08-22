@@ -166,6 +166,59 @@ synchronizes the protected `Admin` model, and verifies that every admin ID is
 unchanged afterward. Production also requires the temporary
 `DB_INDEX_ALLOW_PRODUCTION=true` maintenance-window override.
 
+## Guarded official 2026 fixture migration
+
+The one-time 2026 fixture migration is read-only by default and always targets
+one explicitly supplied tournament ID:
+
+```bash
+npm run db:official-2026:plan -- --tournament-id=<exact-tournament-object-id>
+```
+
+The plan pins the source DOCX by SHA-256, verifies the exact 14 registered team
+identities, maps Pot 1 to Group A and Pot 2 to Group B, and maps the three
+existing venue records to `Eclipse Arena`, `Wembley Hotel`, and `Tribu Arena`.
+It accepts only the documented exact aliases; it does not fuzzy-match names.
+The official manifest contains 42 unique group matches: 41 confirmed dated
+fixtures and the Samba Boys–NYSC opener left pending because the source does
+not state its kickoff or venue.
+
+Execution is refused unless all 42 legacy generated fixtures and all 14 legacy
+standings remain untouched. Any live/completed match, score, event, winner,
+result lock, deleted fixture, draw, bracket, player statistic, competition
+operation, existing v2 entry, or roster snapshot stops the migration. It also
+requires a maximum of ten active players per team and refuses ambiguous or
+unexpected team/venue/count inventories.
+
+After independently verifying the plan and a restorable backup, execution
+requires the temporary environment gate plus the exact connected database,
+tournament ID, current tournament name, backup reference, and confirmation
+phrase:
+
+```bash
+OFFICIAL_2026_MIGRATION_ALLOW_EXECUTE=true npm run db:official-2026:migrate -- \
+  --tournament-id=<exact-tournament-object-id> \
+  --confirm-tournament-id=<same-exact-tournament-object-id> \
+  --confirm-tournament-name="<exact-current-tournament-name>" \
+  --confirm-db=<exact-connected-database-name> \
+  --backup-reference=<verified-restorable-backup-id> \
+  --backup-sha256=<independently-computed-backup-artifact-sha256> \
+  --confirm=APPLY-OFFICIAL-2026-PHYSICAL-FIXTURES
+```
+
+Production additionally requires the temporary
+`OFFICIAL_2026_MIGRATION_ALLOW_PRODUCTION=true` maintenance-window gate. The
+replacement, v2 conversion, entry/group creation, roster snapshot, zero
+standings, venue renames, official fixture insert, and immutable audit marker
+are committed in one MongoDB transaction. The audit marker stores only the
+backup reference's safe basename (when available) and SHA-256 checksum, never
+the supplied absolute path. The checksum must be computed independently from
+the backup artifact; it is not derived from the reference/path text. After
+commit, every one of the 42 stored pairings,
+groups, dates, venues, schedule states, and provenance fields is compared with
+the pinned manifest before success is reported. The command never prints the
+MongoDB URI or application secrets.
+
 ---
 
 ## 🛠️ API Reference
@@ -193,8 +246,6 @@ unchanged afterward. Production also requires the temporary
 | `POST` | `/` | Admin | Create a new tournament season |
 | `PATCH` | `/:id` | Admin | Update tournament details/status |
 | `GET` | `/:id/readiness` | Admin | Verification if teams/players meet requirements |
-| `POST` | `/:id/generate-fixtures` | Admin | Initialize League phase matches |
-| `POST` | `/:id/generate-knockout` | Admin | Initialize Knockout phase (Round of 16/etc) |
 
 #### 14-team two-group workflow (`/:tournamentId/competition`)
 
@@ -205,20 +256,75 @@ unchanged afterward. Production also requires the temporary
 | `GET/POST` | `/entries` | Admin | List or enroll one of exactly 14 tournament teams |
 | `DELETE` | `/entries/:entryId` | Admin | Remove an entry before fixture publication |
 | `PUT` | `/groups` | Admin | Save the complete seven-team Group A and Group B assignment |
-| `POST` | `/group-fixtures/preview` | Admin | Preview the deterministic 42-match single-leg group schedule and plan hash |
-| `POST` | `/group-fixtures/publish` | Admin | Publish the plan transactionally with `Idempotency-Key` |
+| `POST` | `/group-fixtures/preview` | Admin | Validate and normalize the admin-supplied 42-row official group plan |
+| `GET` | `/group-fixtures/plan` | Admin | Read the published official plan, or `not_published` with an empty fixture list |
+| `POST` | `/group-fixtures/publish` | Admin | Publish the unchanged validated official plan with `Idempotency-Key` |
 | `GET` | `/standings` | Public | Return independent Group A and Group B standings |
 | `PUT` | `/tie-resolutions` | Admin | Record or correct the committee decision for a still-current tied ranking basis |
 | `POST` | `/qualification/finalize` | Admin | Lock qualifiers after all group results and cutoff ties resolve |
-| `GET/POST` | `/draws` | Admin | List or create the fixed seeded quarter-final plan |
-| `POST` | `/draws/:drawId/publish` | Admin | Publish the immutable A1–B4, A2–B3, B1–A4, B2–A3 bracket |
-| `POST` | `/knockout/progress` | Admin | Materialize semi-finals/final or record the champion |
+| `GET/POST` | `/draws` | Admin | List or record all four pairings from the physical quarter-final draw |
+| `POST` | `/draws/:drawId/publish` | Admin | Publish the four recorded pairings as the durable bracket |
+| `POST` | `/knockout/progress` | Admin | Consume completed bracket results, create unscheduled next-round slots, or record the champion |
 
 The fixed rules are 14 teams, two manually assigned groups of seven, one group
 leg (six matches/team), top four per group, one-leg quarter-finals through the
-final, no random draw, and no third-place match. Ranking is points, goal
+final, a manually recorded physical quarter-final draw, and no third-place
+match. The backend never chooses group or knockout pairings. Ranking is points, goal
 difference, goals scored, a completed direct head-to-head result for an exact
 two-team tie, then an explicit audited committee decision.
+
+The group preview and publish bodies use the same official manifest:
+
+```json
+{
+  "expectedRevision": 3,
+  "sourceReference": "optional physical-document reference",
+  "fixtures": [
+    {
+      "officialNumber": 1,
+      "groupKey": "A",
+      "homeEntryId": "<TournamentEntry ObjectId>",
+      "awayEntryId": "<TournamentEntry ObjectId>",
+      "kickoffAt": null,
+      "venue": null
+    }
+  ]
+}
+```
+
+Exactly 42 rows are required: official numbers 1–42 once each, 21 unique
+pairings in each group, and six appearances per team. A schedule is either
+confirmed (`kickoffAt` with an explicit offset plus an active `venue`) or
+pending (both fields `null`). Confirmed rows reject duplicate venue/kickoff
+slots and more than one match per team on an `Africa/Lagos` calendar day.
+Preview returns the normalized rows, `planHash`, `timeZone`, and
+confirmed/pending counts. Publish adds that unchanged `planHash` to the body.
+`GET /group-fixtures/plan` returns the same normalized fields plus
+`status: "published" | "not_published"` and published match IDs.
+
+The physical quarter-final draw body is:
+
+```json
+{
+  "expectedRevision": 9,
+  "sourceReference": "optional physical-draw reference",
+  "pairings": [
+    {
+      "slot": 1,
+      "homeEntryId": "<qualified TournamentEntry ObjectId>",
+      "awayEntryId": "<qualified TournamentEntry ObjectId>",
+      "kickoffAt": null,
+      "venue": null
+    }
+  ]
+}
+```
+
+Slots 1–4 and all eight finalized qualifiers must each be used exactly once;
+the server does not impose or invent a pairing. Semi-final and final
+participants follow the published bracket topology. Newly reached matches are
+created as `scheduleStatus: "pending"` with `date`/`venue` unset until an admin
+confirms both through `PATCH /api/v1/matches/:id/details`.
 
 Every competition mutation uses `expectedRevision`; stale concurrent changes
 return `409`. Publishing, finalization, draw, and progression operations also
@@ -230,10 +336,18 @@ replica-set deployment.
 | :--- | :--- | :--- | :--- |
 | `GET` | `/` | Public | List matches by match/tournament/status/stage/group/round/leg filters |
 | `PATCH` | `/:id/status` | Admin | Apply a valid scheduled/live/completed/cancelled transition |
-| `PATCH` | `/:id/details` | Admin | Update scores, time, or stage |
+| `PATCH` | `/:id/details` | Admin | Confirm/reschedule with `{date, venue}`, or set both to `null` to mark the schedule pending |
 | `PATCH` | `/:id/winner` | Admin | Atomically set a valid knockout winner and complete the match |
 | `POST` | `/:id/events` | Admin | Add Goal, Yellow, or Red Card with an `Idempotency-Key` |
 | `DELETE` | `/:id/events/:eventId` | Admin | Remove a specific match event |
+
+Pending matches cannot become live/completed, accept events, or accept a
+knockout winner. Rescheduling revalidates the active venue, venue/kickoff
+collision, and one-match-per-team-per-`Africa/Lagos`-day rules atomically.
+Once a confirmed match references a venue name, that venue cannot be renamed
+or deleted; address and importance edits remain available. Venue mutations and
+schedule confirmation share an optimistic venue-version fence so concurrent
+changes fail closed and can be retried safely.
 
 ### 🛡️ Teams & Players (`/api/v1/teams` & `../../players`)
 | Method | Endpoint | Access | Description |

@@ -6,9 +6,16 @@ import {
 } from '@/models/tournament.model';
 import {
   createCompetitionDrawSchema,
+  previewGroupFixturesSchema,
+  publishGroupFixturesSchema,
   resolveCompetitionTieSchema,
   updateCompetitionRulesSchema,
 } from '@/validators/competition.validator';
+
+const objectIds = Array.from(
+  { length: 14 },
+  (_, index) => (index + 1).toString(16).padStart(24, '0')
+);
 
 describe('fixed v2 competition API policy', () => {
   it('publishes the confirmed immutable rule values', () => {
@@ -25,8 +32,8 @@ describe('fixed v2 competition API policy', () => {
         CompetitionTieBreaker.HEAD_TO_HEAD,
         CompetitionTieBreaker.COMMITTEE_DECISION,
       ],
-      drawMode: CompetitionDrawMode.SEEDED_CROSS_GROUP,
-      avoidSameGroupFirstRound: true,
+      drawMode: CompetitionDrawMode.MANUAL,
+      avoidSameGroupFirstRound: false,
       thirdPlaceMatch: false,
       maxRosterPlayers: 10,
     });
@@ -39,22 +46,77 @@ describe('fixed v2 competition API policy', () => {
     expect(() =>
       updateCompetitionRulesSchema.parse({ expectedRevision: 3, roundRobinLegs: 2 })
     ).toThrow();
-    expect(() =>
+    expect(
       updateCompetitionRulesSchema.parse({
         expectedRevision: 3,
         drawMode: CompetitionDrawMode.MANUAL,
+      }).drawMode
+    ).toBe(CompetitionDrawMode.MANUAL);
+    expect(() =>
+      updateCompetitionRulesSchema.parse({
+        expectedRevision: 3,
+        drawMode: CompetitionDrawMode.SEEDED_CROSS_GROUP,
       })
     ).toThrow();
   });
 
-  it('allows only a revision when creating the fixed seeded draw', () => {
-    expect(createCompetitionDrawSchema.parse({ expectedRevision: 9 })).toEqual({
+  it('requires all four manually recorded physical quarter-final pairings', () => {
+    const pairings = Array.from({ length: 4 }, (_, index) => ({
+      slot: index + 1,
+      homeEntryId: objectIds[index * 2],
+      awayEntryId: objectIds[index * 2 + 1],
+      kickoffAt: null,
+      venue: null,
+    }));
+    expect(createCompetitionDrawSchema.parse({ expectedRevision: 9, pairings })).toEqual({
       expectedRevision: 9,
+      pairings,
     });
     expect(() =>
       createCompetitionDrawSchema.parse({
         expectedRevision: 9,
-        manualPairings: [],
+        pairings: pairings.slice(0, 3),
+      })
+    ).toThrow();
+    expect(() =>
+      createCompetitionDrawSchema.parse({
+        expectedRevision: 9,
+        pairings: pairings.map((pairing, index) =>
+          index === 0
+            ? { ...pairing, kickoffAt: '2026-08-23T12:00:00+01:00' }
+            : pairing
+        ),
+      })
+    ).toThrow(/both be set or both be null/i);
+  });
+
+  it('requires the exact official group-manifest shape for preview and publish', () => {
+    const fixtures = Array.from({ length: 42 }, (_, index) => ({
+      officialNumber: index + 1,
+      groupKey: index < 21 ? ('A' as const) : ('B' as const),
+      homeEntryId: objectIds[index % 7],
+      awayEntryId: objectIds[(index + 1) % 7],
+      kickoffAt: null,
+      venue: null,
+    }));
+    expect(
+      previewGroupFixturesSchema.parse({ expectedRevision: 3, fixtures }).fixtures
+    ).toHaveLength(42);
+    expect(
+      publishGroupFixturesSchema.parse({
+        expectedRevision: 3,
+        fixtures,
+        planHash: 'a'.repeat(64),
+      }).planHash
+    ).toBe('a'.repeat(64));
+    expect(() =>
+      previewGroupFixturesSchema.parse({ expectedRevision: 3, fixtures: fixtures.slice(1) })
+    ).toThrow();
+    expect(() =>
+      publishGroupFixturesSchema.parse({
+        expectedRevision: 3,
+        fixtures,
+        planHash: 'not-a-hash',
       })
     ).toThrow();
   });

@@ -87,6 +87,11 @@ router.post(
   validate(previewGroupFixturesSchema),
   competitionController.previewFixtures
 );
+router.get(
+  '/:tournamentId/competition/group-fixtures/plan',
+  validateObjectIdParam('tournamentId', 'tournament'),
+  competitionController.getFixturePlan
+);
 router.post(
   '/:tournamentId/competition/group-fixtures/publish',
   validateObjectIdParam('tournamentId', 'tournament'),
@@ -132,7 +137,4 @@ router.patch(
   validate(updateTournamentSchema),
   tournamentController.updateTournament
 );
-router.post('/:tournamentId/generate-fixtures', tournamentController.generateFixtures);
-router.post('/:tournamentId/generate-knockout', tournamentController.generateKnockout);
-
 export default router;

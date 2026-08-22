@@ -12,7 +12,12 @@ import CompetitionBracket, {
 import CompetitionOperation, {
   CompetitionOperationStatus,
 } from '@/models/competition-operation.model';
-import Match, { MatchStage, MatchStatus } from '@/models/match.model';
+import Match, {
+  MatchFixtureSource,
+  MatchScheduleStatus,
+  MatchStage,
+  MatchStatus,
+} from '@/models/match.model';
 import PlayerStats from '@/models/player-stats.model';
 import Standings from '@/models/standings.model';
 import Team from '@/models/team.model';
@@ -35,10 +40,6 @@ import TournamentEntry, {
 } from '@/models/tournament-entry.model';
 import Venue from '@/models/venue.model';
 import {
-  generateGroupRoundRobinFixtures,
-  scheduleRoundMatchweeks,
-} from '@/utils/scheduler.util';
-import {
   buildTournamentRosterSnapshotRows,
   findTournamentRosterLimitViolations,
 } from '@/utils/roster.util';
@@ -51,8 +52,6 @@ import {
   CompetitionTieCluster,
   deriveKnockoutProgression,
   ComparableStanding,
-  createSeededCrossGroupPairings,
-  DrawEntryLike,
   getFirstKnockoutStage,
   getMissingCompetitionDecisions,
   isCompetitionCompletionSatisfied,
@@ -67,9 +66,19 @@ import {
   withBracketNodeTeamIdentities,
 } from '@/utils/competition.util';
 import {
+  buildOfficialGroupFixturePlanCore,
+  competitionLocalCalendarDay,
+  OfficialFixturePlanError,
+  OfficialGroupFixtureInput,
+} from '@/utils/official-fixture.util';
+import {
   fenceTeamLifecycle,
   fenceTeamLifecycles,
 } from '@/services/team-lifecycle.service';
+import {
+  fenceActiveVenueNames,
+  VenueMutationError,
+} from '@/services/venue-lifecycle.service';
 import { readCompetitionTeamIdentitySummaries } from '@/services/competition-entry-identity.service';
 import {
   appendCommitteeResolutionDecision,
@@ -98,28 +107,38 @@ interface GroupAssignmentInput {
 
 interface FixturePlanItem {
   fixtureKey: string;
+  officialNumber: number;
   groupKey: GroupKey;
-  leg: 1 | 2;
-  round: number;
-  roundSlot: number;
+  leg: 1;
   homeEntryId: string;
   awayEntryId: string;
   homeTeamId: string;
   awayTeamId: string;
   homeTeamName: string;
   awayTeamName: string;
-  date: string;
-  venue: string;
+  kickoffAt: string | null;
+  venue: string | null;
+  scheduleStatus: MatchScheduleStatus;
 }
 
 interface FixturePlan {
   tournamentId: string;
   tournamentRevision: number;
-  matchesPerDay: number;
-  roundRobinLegs: 1 | 2;
+  timeZone: 'Africa/Lagos';
+  sourceReference: string | null;
   totalMatches: number;
+  confirmedCount: number;
+  pendingCount: number;
   fixtures: FixturePlanItem[];
   planHash: string;
+}
+
+interface PhysicalDrawPairingInput {
+  slot: number;
+  homeEntryId: string;
+  awayEntryId: string;
+  kickoffAt: string | null;
+  venue: string | null;
 }
 
 interface CompetitionStandingRow extends ComparableStanding {
@@ -158,6 +177,7 @@ interface CompetitionRankingState {
 }
 
 const GROUP_KEYS: GroupKey[] = ['A', 'B'];
+const COMPETITION_TIME_ZONE = 'Africa/Lagos' as const;
 const BRACKET_STAGES: MatchStage[] = [
   MatchStage.ROUND_OF_16,
   MatchStage.QUARTER_FINALS,
@@ -171,11 +191,36 @@ const CHAMPIONSHIP_STAGES = new Set<MatchStage>([
   MatchStage.SEMI_FINALS,
   MatchStage.FINAL,
 ]);
+const officialFixtureNumberForBracketNode = (stage: MatchStage, slot: number): number => {
+  if (stage === MatchStage.QUARTER_FINALS) return 42 + slot;
+  if (stage === MatchStage.SEMI_FINALS) return 46 + slot;
+  if (stage === MatchStage.FINAL) return 48 + slot;
+  if (stage === MatchStage.THIRD_PLACE) return 49 + slot;
+  throw new CompetitionError(
+    'This stage has no official fixture-number allocation.',
+    409,
+    'OFFICIAL_FIXTURE_STAGE_INVALID'
+  );
+};
 const EDITABLE_WORKFLOW_STATES = new Set<CompetitionWorkflowState>([
   CompetitionWorkflowState.SETUP,
   CompetitionWorkflowState.ENTRIES_READY,
   CompetitionWorkflowState.GROUPS_ASSIGNED,
 ]);
+
+const fenceCompetitionVenueNames = async (
+  venueNames: Iterable<string>,
+  session: ClientSession
+): Promise<Map<string, string>> => {
+  try {
+    return await fenceActiveVenueNames(venueNames, session);
+  } catch (error) {
+    if (error instanceof VenueMutationError) {
+      throw new CompetitionError(error.message, error.statusCode, error.code);
+    }
+    throw error;
+  }
+};
 
 export const FIXED_V2_FORMAT_POLICY = Object.freeze({
   teamCount: 14,
@@ -192,7 +237,7 @@ export const FIXED_V2_FORMAT_POLICY = Object.freeze({
     CompetitionTieBreaker.COMMITTEE_DECISION,
   ],
   headToHeadPolicy: 'completed_direct_result_for_two_team_tie',
-  quarterFinalPairings: ['A1-B4', 'A2-B3', 'B1-A4', 'B2-A3'],
+  quarterFinalPairings: 'physical_draw',
   knockoutLegs: 1,
   thirdPlaceMatch: false,
   maxRosterPlayers: 10,
@@ -619,7 +664,6 @@ export const getCompetitionOverview = async (tournamentId: string) => {
       );
     }
   }
-  if (venueCount === 0) blockers.push('At least one active venue is required.');
   const stageNodes = (bracket.stages[tournament.currentStage] ?? []) as Array<{
     match: null | { status?: string; winner?: unknown };
   }>;
@@ -975,23 +1019,18 @@ export const assignCompetitionGroups = async (
   }
 };
 
-const nextSaturdayAfter = (value: Date): Date => {
-  const date = new Date(value);
-  const daysUntilSaturday = (6 - date.getUTCDay() + 7) % 7 || 7;
-  date.setUTCDate(date.getUTCDate() + daysUntilSaturday);
-  date.setUTCHours(10, 0, 0, 0);
-  return date;
-};
-
 const buildFixturePlan = async (
   tournamentId: string,
-  matchesPerDay: number,
+  expectedRevision: number,
+  requestedFixtures: OfficialGroupFixtureInput[],
+  sourceReference?: string,
   session?: ClientSession
 ): Promise<FixturePlan> => {
   const tournament = await getV2Tournament(tournamentId, session);
+  assertExpectedRevision(tournament.workflowRevision, expectedRevision);
   if (tournament.workflowState !== CompetitionWorkflowState.GROUPS_ASSIGNED) {
     throw new CompetitionError(
-      'Complete and save the 7/7 group assignment before previewing fixtures',
+      'Complete and save the 7/7 group assignment before validating official fixtures',
       409,
       'GROUPS_NOT_READY'
     );
@@ -1019,8 +1058,6 @@ const buildFixturePlan = async (
     entryQuery.session(session);
     venueQuery.session(session);
   }
-  // MongoDB transactions do not support parallel operations on one session,
-  // so this shared preview/publication helper keeps its reads serialized.
   const entries = await entryQuery;
   const venues = await venueQuery;
   const currentTeamQuery = Team.find({
@@ -1034,134 +1071,253 @@ const buildFixturePlan = async (
   const currentTeamById = new Map(
     currentTeams.map((team) => [team._id.toString(), team])
   );
-  if (entries.length !== tournament.competitionRules!.teamCount) {
-    throw new CompetitionError('Tournament entry count is no longer valid', 409, 'ENTRY_COUNT_INVALID');
-  }
-  if (venues.length === 0) {
-    throw new CompetitionError('At least one active venue is required', 409, 'NO_ACTIVE_VENUES');
-  }
-  const dailyVenueCapacity = venues.length * 7;
-  if (matchesPerDay > dailyVenueCapacity) {
-    throw new CompetitionError(
-      `matchesPerDay exceeds the ${dailyVenueCapacity}-match capacity of the active venues`,
-      400,
-      'DAILY_VENUE_CAPACITY_EXCEEDED',
-      { venueCount: venues.length, dailyVenueCapacity }
-    );
-  }
-  const fixturesPerGlobalRound =
-    GROUP_KEYS.length * Math.floor(tournament.competitionRules!.teamsPerGroup / 2);
-  if (matchesPerDay * 2 < fixturesPerGlobalRound) {
-    throw new CompetitionError(
-      `matchesPerDay must be at least ${Math.ceil(fixturesPerGlobalRound / 2)} so a complete ` +
-        'group round fits within its Saturday/Sunday matchweek',
-      400,
-      'MATCHWEEK_CAPACITY_EXCEEDED',
-      { fixturesPerGlobalRound, weekendCapacity: matchesPerDay * 2 }
-    );
-  }
 
-  const entryById = new Map(entries.map((entry) => [entry._id.toString(), entry]));
-  const roundsByGroup = new Map<GroupKey, ReturnType<typeof generateGroupRoundRobinFixtures>>();
+  if (entries.length !== FIXED_V2_COMPETITION_RULES.teamCount) {
+    throw new CompetitionError(
+      'Tournament entry count is no longer valid',
+      409,
+      'ENTRY_COUNT_INVALID'
+    );
+  }
   for (const groupKey of GROUP_KEYS) {
-    const groupEntries = entries.filter((entry) => entry.groupKey === groupKey);
-    if (groupEntries.length !== tournament.competitionRules!.teamsPerGroup) {
+    if (
+      entries.filter((entry) => entry.groupKey === groupKey).length !==
+      FIXED_V2_COMPETITION_RULES.teamsPerGroup
+    ) {
       throw new CompetitionError(
-        `Group ${groupKey} must contain exactly ${tournament.competitionRules!.teamsPerGroup} teams`,
+        `Group ${groupKey} must contain exactly ${FIXED_V2_COMPETITION_RULES.teamsPerGroup} teams`,
         409,
         'GROUP_SIZE_INVALID'
       );
     }
-    roundsByGroup.set(
-      groupKey,
-      generateGroupRoundRobinFixtures(
-        groupEntries.map((entry) => entry._id.toString()),
-        tournament.competitionRules!.roundRobinLegs as 1 | 2
-      )
-    );
   }
 
-  const fixtureSpecs: Array<{
-    groupKey: GroupKey;
-    leg: 1 | 2;
-    round: number;
-    roundSlot: number;
-    homeEntryId: string;
-    awayEntryId: string;
-  }> = [];
-  const maximumRound = Math.max(
-    ...GROUP_KEYS.map((key) => roundsByGroup.get(key)!.at(-1)!.round)
-  );
-  for (let round = 1; round <= maximumRound; round++) {
-    for (const groupKey of GROUP_KEYS) {
-      const groupRound = roundsByGroup.get(groupKey)!.find((item) => item.round === round)!;
-      for (const fixture of groupRound.fixtures) {
-        fixtureSpecs.push({
-          groupKey,
-          leg: fixture.leg,
-          round: fixture.round,
-          roundSlot: fixture.roundSlot,
-          homeEntryId: fixture.team1,
-          awayEntryId: fixture.team2,
-        });
-      }
+  let corePlan;
+  try {
+    corePlan = buildOfficialGroupFixturePlanCore(
+      tournamentId,
+      requestedFixtures,
+      entries.map((entry) => {
+        const currentTeam = currentTeamById.get(entry.teamId.toString());
+        const identity = selectCompetitionTeamIdentity(
+          { name: entry.teamNameSnapshot, logo: entry.teamLogoSnapshot },
+          currentTeam,
+          false
+        );
+        return {
+          entryId: entry._id.toString(),
+          teamId: entry.teamId.toString(),
+          groupKey: entry.groupKey as GroupKey,
+          teamName: identity.name,
+        };
+      }),
+      venues.map((venue) => venue.name),
+      COMPETITION_TIME_ZONE
+    );
+  } catch (error) {
+    if (error instanceof OfficialFixturePlanError) {
+      throw new CompetitionError(error.message, 422, error.code, error.details);
     }
+    throw error;
   }
-
-  const scheduledSpecs = scheduleRoundMatchweeks(
-    fixtureSpecs,
-    tournament.startDate,
-    matchesPerDay
-  );
-  const fixtures: FixturePlanItem[] = scheduledSpecs.map(({ fixture: spec, matchDate, dailySlot }) => {
-    const venueIndex = dailySlot % venues.length;
-    const timeSlot = Math.floor(dailySlot / venues.length);
-    const scheduledDate = new Date(matchDate);
-    scheduledDate.setUTCHours(10 + timeSlot * 2, 0, 0, 0);
-
-    const homeEntry = entryById.get(spec.homeEntryId)!;
-    const awayEntry = entryById.get(spec.awayEntryId)!;
-    const homeIdentity = selectCompetitionTeamIdentity(
-      { name: homeEntry.teamNameSnapshot, logo: homeEntry.teamLogoSnapshot },
-      currentTeamById.get(homeEntry.teamId.toString()),
-      false
-    );
-    const awayIdentity = selectCompetitionTeamIdentity(
-      { name: awayEntry.teamNameSnapshot, logo: awayEntry.teamLogoSnapshot },
-      currentTeamById.get(awayEntry.teamId.toString()),
-      false
-    );
-    return {
-      fixtureKey: `${tournamentId}:group_stage:${spec.groupKey}:L${spec.leg}:R${spec.round}:M${spec.roundSlot}`,
-      ...spec,
-      homeTeamId: homeEntry.teamId.toString(),
-      awayTeamId: awayEntry.teamId.toString(),
-      homeTeamName: homeIdentity.name,
-      awayTeamName: awayIdentity.name,
-      date: scheduledDate.toISOString(),
-      venue: venues[venueIndex].name,
-    };
-  });
 
   const unhashedPlan = {
     tournamentId,
     tournamentRevision: tournament.workflowRevision,
-    matchesPerDay,
-    roundRobinLegs: tournament.competitionRules!.roundRobinLegs as 1 | 2,
-    totalMatches: fixtures.length,
-    fixtures,
+    timeZone: COMPETITION_TIME_ZONE,
+    sourceReference: sourceReference?.trim() ?? null,
+    totalMatches: corePlan.totalMatches,
+    confirmedCount: corePlan.confirmedCount,
+    pendingCount: corePlan.pendingCount,
+    fixtures: corePlan.fixtures,
   };
   return { ...unhashedPlan, planHash: hashValue(unhashedPlan) };
 };
 
 export const previewGroupFixtures = async (
   tournamentId: string,
-  matchesPerDay: number
-): Promise<FixturePlan> => buildFixturePlan(tournamentId, matchesPerDay);
+  input: {
+    expectedRevision: number;
+    sourceReference?: string;
+    fixtures: OfficialGroupFixtureInput[];
+  }
+): Promise<FixturePlan> =>
+  buildFixturePlan(
+    tournamentId,
+    input.expectedRevision,
+    input.fixtures,
+    input.sourceReference
+  );
+
+export const getPublishedGroupFixturePlan = async (tournamentId: string) => {
+  const tournament = await getV2Tournament(tournamentId);
+  const matches = await Match.find({
+    tournamentId,
+    stage: MatchStage.GROUP_STAGE,
+    isDeleted: false,
+  })
+    .sort({ officialFixtureNumber: 1, _id: 1 })
+    .lean();
+  if (matches.length === 0) {
+    return {
+      status: 'not_published' as const,
+      tournamentId,
+      tournamentRevision: tournament.workflowRevision,
+      timeZone: COMPETITION_TIME_ZONE,
+      sourceReference: null,
+      totalMatches: 0,
+      confirmedCount: 0,
+      pendingCount: 0,
+      fixtures: [],
+      planHash: null,
+    };
+  }
+  if (matches.length !== 42) {
+    throw new CompetitionError(
+      'The persisted official fixture publication is incomplete.',
+      409,
+      'PERSISTED_OFFICIAL_FIXTURE_COUNT_INVALID',
+      { expected: 42, actual: matches.length }
+    );
+  }
+  const entries = await TournamentEntry.find({
+    tournamentId,
+    status: TournamentEntryStatus.ACTIVE,
+    isDeleted: false,
+  }).lean();
+  const teamIds = entries.map((entry) => entry.teamId);
+  const currentTeams = await Team.find({ _id: { $in: teamIds }, isDeleted: false })
+    .select('name logo')
+    .lean();
+  const activeVenues = await Venue.find({ isDeleted: false }).select('name').lean();
+  const currentTeamById = new Map(
+    currentTeams.map((team) => [team._id.toString(), team])
+  );
+  const entryByTeamId = new Map(entries.map((entry) => [entry.teamId.toString(), entry]));
+  const fixtures = matches.map((match) => {
+    const homeEntry = entryByTeamId.get(match.homeTeam.toString());
+    const awayEntry = entryByTeamId.get(match.awayTeam.toString());
+    if (
+      !homeEntry ||
+      !awayEntry ||
+      !match.officialFixtureNumber ||
+      !match.fixtureKey ||
+      !match.fixturePublicationHash ||
+      match.fixtureSource !== MatchFixtureSource.PHYSICAL_OFFICIAL ||
+      match.fixtureKey !==
+        `${tournamentId}:group_stage:official:${match.officialFixtureNumber}`
+    ) {
+      throw new CompetitionError(
+        'The persisted official fixture publication has invalid identity metadata.',
+        409,
+        'PERSISTED_OFFICIAL_FIXTURE_INVALID',
+        { matchId: match._id.toString() }
+      );
+    }
+    const homeIdentity = selectCompetitionTeamIdentity(
+      { name: homeEntry.teamNameSnapshot, logo: homeEntry.teamLogoSnapshot },
+      currentTeamById.get(homeEntry.teamId.toString()),
+      tournament.workflowState === CompetitionWorkflowState.COMPLETED
+    );
+    const awayIdentity = selectCompetitionTeamIdentity(
+      { name: awayEntry.teamNameSnapshot, logo: awayEntry.teamLogoSnapshot },
+      currentTeamById.get(awayEntry.teamId.toString()),
+      tournament.workflowState === CompetitionWorkflowState.COMPLETED
+    );
+    return {
+      matchId: match._id.toString(),
+      fixtureKey: match.fixtureKey,
+      officialNumber: match.officialFixtureNumber,
+      groupKey: match.groupKey as GroupKey,
+      leg: 1 as const,
+      homeEntryId: homeEntry._id.toString(),
+      awayEntryId: awayEntry._id.toString(),
+      homeTeamId: homeEntry.teamId.toString(),
+      awayTeamId: awayEntry.teamId.toString(),
+      homeTeamName: homeIdentity.name,
+      awayTeamName: awayIdentity.name,
+      kickoffAt: match.date?.toISOString() ?? null,
+      venue: match.venue ?? null,
+      scheduleStatus: match.scheduleStatus,
+    };
+  });
+  let normalizedPlan;
+  try {
+    normalizedPlan = buildOfficialGroupFixturePlanCore(
+      tournamentId,
+      fixtures.map((fixture) => ({
+        officialNumber: fixture.officialNumber,
+        groupKey: fixture.groupKey,
+        homeEntryId: fixture.homeEntryId,
+        awayEntryId: fixture.awayEntryId,
+        kickoffAt: fixture.kickoffAt,
+        venue: fixture.venue,
+      })),
+      entries.map((entry) => ({
+        entryId: entry._id.toString(),
+        teamId: entry.teamId.toString(),
+        groupKey: entry.groupKey as GroupKey,
+        teamName: entry.teamNameSnapshot,
+      })),
+      activeVenues.map((venue) => venue.name),
+      COMPETITION_TIME_ZONE
+    );
+  } catch (error) {
+    if (error instanceof OfficialFixturePlanError) {
+      throw new CompetitionError(error.message, 409, error.code, error.details);
+    }
+    throw error;
+  }
+  if (
+    normalizedPlan.fixtures.some(
+      (normalized, index) =>
+        normalized.scheduleStatus !== fixtures[index].scheduleStatus ||
+        normalized.fixtureKey !== fixtures[index].fixtureKey
+    )
+  ) {
+    throw new CompetitionError(
+      'The persisted official fixture publication has inconsistent schedule metadata.',
+      409,
+      'PERSISTED_OFFICIAL_FIXTURE_SCHEDULE_INVALID'
+    );
+  }
+  const hashes = new Set(matches.map((match) => match.fixturePublicationHash));
+  if (hashes.size !== 1) {
+    throw new CompetitionError(
+      'The persisted fixtures do not belong to one official publication.',
+      409,
+      'OFFICIAL_GROUP_PUBLICATION_MISMATCH'
+    );
+  }
+  const confirmedCount = fixtures.filter(
+    (fixture) => fixture.scheduleStatus === MatchScheduleStatus.CONFIRMED
+  ).length;
+  return {
+    status: 'published' as const,
+    tournamentId,
+    tournamentRevision: tournament.workflowRevision,
+    timeZone: COMPETITION_TIME_ZONE,
+    totalMatches: fixtures.length,
+    confirmedCount,
+    pendingCount: fixtures.length - confirmedCount,
+    fixtures,
+    planHash: [...hashes][0],
+    sourceReference:
+      [...new Set(matches.map((match) => match.fixtureSourceReference ?? null))].length === 1
+        ? matches[0].fixtureSourceReference ?? null
+        : null,
+  };
+};
 
 export const publishGroupFixtures = async (
   tournamentId: string,
-  input: { expectedRevision: number; planHash: string; matchesPerDay: number },
+  input: {
+    expectedRevision: number;
+    planHash: string;
+    sourceReference?: string;
+    fixtures: OfficialGroupFixtureInput[];
+  },
+  adminId?: string,
   idempotencyKey?: string
 ) =>
   runIdempotentTransaction(
@@ -1170,13 +1326,50 @@ export const publishGroupFixtures = async (
     idempotencyKey,
     input,
     async (session) => {
-      const plan = await buildFixturePlan(tournamentId, input.matchesPerDay, session);
-      assertExpectedRevision(plan.tournamentRevision, input.expectedRevision);
+      const plan = await buildFixturePlan(
+        tournamentId,
+        input.expectedRevision,
+        input.fixtures,
+        input.sourceReference,
+        session
+      );
       if (plan.planHash !== input.planHash) {
         throw new CompetitionError(
-          'Fixture inputs changed after preview. Generate a new preview before publishing.',
+          'Official fixture inputs changed after validation. Validate the plan again before publishing.',
           409,
           'FIXTURE_PLAN_CHANGED'
+        );
+      }
+      await fenceCompetitionVenueNames(
+        plan.fixtures.flatMap((fixture) => (fixture.venue ? [fixture.venue] : [])),
+        session
+      );
+
+      const existingResourceTypes: string[] = [];
+      if (await Match.exists({ tournamentId }).session(session)) {
+        existingResourceTypes.push('matches');
+      }
+      if (await Standings.exists({ tournamentId }).session(session)) {
+        existingResourceTypes.push('standings');
+      }
+      if (await TournamentRosterEntry.exists({ tournamentId }).session(session)) {
+        existingResourceTypes.push('roster snapshots');
+      }
+      if (await CompetitionDraw.exists({ tournamentId }).session(session)) {
+        existingResourceTypes.push('draws');
+      }
+      if (await CompetitionBracket.exists({ tournamentId }).session(session)) {
+        existingResourceTypes.push('bracket');
+      }
+      if (await PlayerStats.exists({ tournamentId }).session(session)) {
+        existingResourceTypes.push('player statistics');
+      }
+      if (existingResourceTypes.length > 0) {
+        throw new CompetitionError(
+          'The first official fixture publication requires an empty tournament competition state.',
+          409,
+          'OFFICIAL_PUBLICATION_TARGET_NOT_EMPTY',
+          { resourceTypes: existingResourceTypes }
         );
       }
 
@@ -1251,19 +1444,26 @@ export const publishGroupFixtures = async (
         );
       }
 
+      const publishedAt = new Date();
       await Match.insertMany(
         plan.fixtures.map((fixture) => ({
           tournamentId,
           homeTeam: fixture.homeTeamId,
           awayTeam: fixture.awayTeamId,
-          date: new Date(fixture.date),
-          venue: fixture.venue,
+          date: fixture.kickoffAt ? new Date(fixture.kickoffAt) : undefined,
+          venue: fixture.venue ?? undefined,
+          scheduleStatus: fixture.scheduleStatus,
           stage: MatchStage.GROUP_STAGE,
           status: MatchStatus.SCHEDULED,
           groupKey: fixture.groupKey,
           leg: fixture.leg,
-          round: fixture.round,
           fixtureKey: fixture.fixtureKey,
+          officialFixtureNumber: fixture.officialNumber,
+          fixtureSource: MatchFixtureSource.PHYSICAL_OFFICIAL,
+          fixturePublicationHash: plan.planHash,
+          fixtureSourceReference: plan.sourceReference ?? undefined,
+          fixturePublishedBy: adminId,
+          fixturePublishedAt: publishedAt,
           events: [],
         })),
         { session, ordered: true }
@@ -1341,6 +1541,12 @@ export const publishGroupFixtures = async (
         { session, ordered: true }
       );
 
+      const publicationTournament = await getV2Tournament(tournamentId, session);
+      assertExpectedRevision(publicationTournament.workflowRevision, input.expectedRevision);
+      const publicationStatus =
+        publicationTournament.startDate.getTime() <= publishedAt.getTime()
+          ? TournamentStatus.ONGOING
+          : TournamentStatus.UPCOMING;
       const updated = await updateTournamentWithRevision(
         tournamentId,
         input.expectedRevision,
@@ -1348,8 +1554,8 @@ export const publishGroupFixtures = async (
           workflowState: CompetitionWorkflowState.GROUP_STAGE,
           currentStage: MatchStage.GROUP_STAGE,
           fixturesGenerated: true,
-          leagueRounds: 7 * plan.roundRobinLegs,
-          status: TournamentStatus.ONGOING,
+          leagueRounds: 7,
+          status: publicationStatus,
           standingsRevision: input.expectedRevision + 1,
         },
         session
@@ -1359,11 +1565,103 @@ export const publishGroupFixtures = async (
         tournamentId,
         workflowRevision: updated.workflowRevision,
         fixtureCount: plan.totalMatches,
+        confirmedCount: plan.confirmedCount,
+        pendingCount: plan.pendingCount,
         rosterPlayerCount: rosterRows.length,
         planHash: plan.planHash,
       };
     }
   );
+
+const assertPersistedOfficialGroupFixtureStructure = async (
+  tournamentId: string,
+  session: ClientSession
+): Promise<void> => {
+  const entries = await TournamentEntry.find({
+    tournamentId,
+    status: TournamentEntryStatus.ACTIVE,
+    isDeleted: false,
+  })
+    .session(session)
+    .lean();
+  const matches = await Match.find({
+    tournamentId,
+    stage: MatchStage.GROUP_STAGE,
+    isDeleted: false,
+  })
+    .session(session)
+    .lean();
+  if (matches.length !== 42) {
+    throw new CompetitionError(
+      'The persisted official group plan must contain exactly 42 matches.',
+      409,
+      'PERSISTED_OFFICIAL_FIXTURE_COUNT_INVALID',
+      { expected: 42, actual: matches.length }
+    );
+  }
+  if (
+    matches.some(
+      (match) =>
+        match.fixtureSource !== MatchFixtureSource.PHYSICAL_OFFICIAL ||
+        match.scheduleStatus !== MatchScheduleStatus.CONFIRMED ||
+        !match.date ||
+        !match.venue ||
+        !match.officialFixtureNumber ||
+        !match.fixturePublicationHash
+    )
+  ) {
+    throw new CompetitionError(
+      'Every official group fixture must be physically published and fully scheduled before qualification.',
+      409,
+      'OFFICIAL_GROUP_SCHEDULE_INCOMPLETE'
+    );
+  }
+  const publicationHashes = new Set(matches.map((match) => match.fixturePublicationHash));
+  if (publicationHashes.size !== 1) {
+    throw new CompetitionError(
+      'The group fixtures do not belong to one official publication.',
+      409,
+      'OFFICIAL_GROUP_PUBLICATION_MISMATCH'
+    );
+  }
+  const entryByTeamId = new Map(entries.map((entry) => [entry.teamId.toString(), entry]));
+  try {
+    buildOfficialGroupFixturePlanCore(
+      tournamentId,
+      matches.map((match) => {
+        const homeEntry = entryByTeamId.get(match.homeTeam.toString());
+        const awayEntry = entryByTeamId.get(match.awayTeam.toString());
+        if (!homeEntry || !awayEntry) {
+          throw new OfficialFixturePlanError(
+            'A persisted official fixture references a team outside the active tournament entries.',
+            'PERSISTED_OFFICIAL_FIXTURE_ENTRY_INVALID',
+            { matchId: match._id.toString() }
+          );
+        }
+        return {
+          officialNumber: match.officialFixtureNumber!,
+          groupKey: match.groupKey as GroupKey,
+          homeEntryId: homeEntry._id.toString(),
+          awayEntryId: awayEntry._id.toString(),
+          kickoffAt: match.date!.toISOString(),
+          venue: match.venue!,
+        };
+      }),
+      entries.map((entry) => ({
+        entryId: entry._id.toString(),
+        teamId: entry.teamId.toString(),
+        groupKey: entry.groupKey as GroupKey,
+        teamName: entry.teamNameSnapshot,
+      })),
+      [...new Set(matches.map((match) => match.venue!))]
+    );
+  } catch (error) {
+    if (error instanceof OfficialFixturePlanError) {
+      throw new CompetitionError(error.message, 409, error.code, error.details);
+    }
+    throw error;
+  }
+};
 
 const calculateCompetitionRankingState = async (
   tournamentId: string,
@@ -1536,7 +1834,13 @@ const calculateCompetitionRankingState = async (
       2);
   const groupStageComplete =
     allMatches.length === expectedMatchCount &&
-    allMatches.every((match) => match.status === MatchStatus.COMPLETED);
+    allMatches.every(
+      (match) =>
+        match.status === MatchStatus.COMPLETED &&
+        match.scheduleStatus === MatchScheduleStatus.CONFIRMED &&
+        Boolean(match.date) &&
+        Boolean(match.venue)
+    );
   const unresolvedTies = ties.filter((tie) => !tie.resolved);
   return {
     groups,
@@ -1929,6 +2233,7 @@ export const finalizeQualification = async (
           ruleIssues
         );
       }
+      await assertPersistedOfficialGroupFixtureStructure(tournamentId, session);
       const expectedMatchCount =
         rules.groupCount * ((rules.teamsPerGroup * (rules.teamsPerGroup - 1)) / 2) *
         (rules.roundRobinLegs as 1 | 2);
@@ -2053,13 +2358,17 @@ export const finalizeQualification = async (
 
 export const createKnockoutDraw = async (
   tournamentId: string,
-  input: { expectedRevision: number },
+  input: {
+    expectedRevision: number;
+    sourceReference?: string;
+    pairings: PhysicalDrawPairingInput[];
+  },
   adminId: string | undefined,
   idempotencyKey?: string
 ) =>
   runIdempotentTransaction(
     tournamentId,
-    'create_knockout_draw',
+    'record_physical_knockout_draw',
     idempotencyKey,
     input,
     async (session) => {
@@ -2067,7 +2376,7 @@ export const createKnockoutDraw = async (
       assertExpectedRevision(tournament.workflowRevision, input.expectedRevision);
       if (tournament.workflowState !== CompetitionWorkflowState.QUALIFICATION_FINALIZED) {
         throw new CompetitionError(
-          'Finalize qualification before creating the knockout draw',
+          'Finalize qualification before recording the physical quarter-final draw',
           409,
           'QUALIFICATION_NOT_FINALIZED'
         );
@@ -2087,29 +2396,184 @@ export const createKnockoutDraw = async (
       const firstKnockoutStage = getFirstKnockoutStage(qualifierCount);
       if (qualifierCount !== 8 || firstKnockoutStage !== MatchStage.QUARTER_FINALS) {
         throw new CompetitionError(
-          'The fixed v2 format requires exactly eight quarterfinal qualifiers.',
+          'The fixed v2 format requires exactly eight quarter-final qualifiers.',
           422,
           'INVALID_V2_QUALIFIER_COUNT'
         );
       }
-      const stage = MatchStage.QUARTER_FINALS;
-      const mode = CompetitionDrawMode.SEEDED_CROSS_GROUP;
-      const drawEntries: DrawEntryLike[] = tournament.qualificationSnapshot.map((entry) => ({
-        entryId: entry.tournamentEntryId.toString(),
-        teamId: entry.teamId.toString(),
-        groupKey: entry.groupKey,
-        rank: entry.rank,
-      }));
-      let pairings: ReturnType<typeof createSeededCrossGroupPairings>;
-      try {
-        pairings = createSeededCrossGroupPairings(drawEntries);
-      } catch (error) {
+
+      const sortedPairings = [...input.pairings].sort((left, right) => left.slot - right.slot);
+      if (
+        new Set(sortedPairings.map((pairing) => pairing.slot)).size !== 4 ||
+        sortedPairings.some((pairing, index) => pairing.slot !== index + 1)
+      ) {
         throw new CompetitionError(
-          error instanceof Error ? error.message : 'The qualification seed data is invalid.',
-          409,
-          'INVALID_QUALIFICATION_SEEDS'
+          'Physical quarter-final slots must use 1 through 4 exactly once.',
+          422,
+          'PHYSICAL_DRAW_SLOTS_INVALID'
         );
       }
+      const qualifierByEntryId = new Map(
+        tournament.qualificationSnapshot.map((entry) => [
+          entry.tournamentEntryId.toString(),
+          entry,
+        ])
+      );
+      const usedEntryIds = new Set<string>();
+      const activeVenueByKey = await fenceCompetitionVenueNames(
+        sortedPairings.flatMap((pairing) =>
+          pairing.kickoffAt !== null && pairing.venue !== null ? [pairing.venue] : []
+        ),
+        session
+      );
+      const existingConfirmedMatches = await Match.find({
+        tournamentId,
+        isDeleted: false,
+        scheduleStatus: MatchScheduleStatus.CONFIRMED,
+        date: { $exists: true },
+      })
+        .select('homeTeam awayTeam date venue')
+        .session(session)
+        .lean();
+      const venueKickoffs = new Set<string>();
+      const normalizedPairings = sortedPairings.map((pairing) => {
+        const home = qualifierByEntryId.get(pairing.homeEntryId);
+        const away = qualifierByEntryId.get(pairing.awayEntryId);
+        if (!home || !away) {
+          throw new CompetitionError(
+            'Every physical draw entry must be one of the eight finalized qualifiers.',
+            422,
+            'PHYSICAL_DRAW_ENTRY_INVALID',
+            { slot: pairing.slot }
+          );
+        }
+        if (
+          pairing.homeEntryId === pairing.awayEntryId ||
+          usedEntryIds.has(pairing.homeEntryId) ||
+          usedEntryIds.has(pairing.awayEntryId)
+        ) {
+          throw new CompetitionError(
+            'Each finalized qualifier must appear in the physical draw exactly once.',
+            422,
+            'PHYSICAL_DRAW_ENTRY_DUPLICATED',
+            { slot: pairing.slot }
+          );
+        }
+        usedEntryIds.add(pairing.homeEntryId);
+        usedEntryIds.add(pairing.awayEntryId);
+
+        let kickoffAt: Date | undefined;
+        let venue: string | undefined;
+        if (pairing.kickoffAt !== null && pairing.venue !== null) {
+          kickoffAt = new Date(pairing.kickoffAt);
+          if (Number.isNaN(kickoffAt.getTime())) {
+            throw new CompetitionError(
+              'A physical draw kickoff time is invalid.',
+              422,
+              'PHYSICAL_DRAW_KICKOFF_INVALID',
+              { slot: pairing.slot }
+            );
+          }
+          venue = activeVenueByKey.get(pairing.venue.trim().toLocaleLowerCase());
+          if (!venue) {
+            throw new CompetitionError(
+              'A confirmed physical draw fixture must use an active venue.',
+              422,
+              'PHYSICAL_DRAW_VENUE_INVALID',
+              { slot: pairing.slot, venue: pairing.venue }
+            );
+          }
+          const collisionKey = `${venue.toLocaleLowerCase()}:${kickoffAt.toISOString()}`;
+          if (venueKickoffs.has(collisionKey)) {
+            throw new CompetitionError(
+              'Two physical draw fixtures cannot use the same venue at the same kickoff.',
+              422,
+              'PHYSICAL_DRAW_VENUE_COLLISION',
+              { slot: pairing.slot, venue }
+            );
+          }
+          const localDay = competitionLocalCalendarDay(kickoffAt);
+          const participantTeamIds = new Set([
+            home.teamId.toString(),
+            away.teamId.toString(),
+          ]);
+          for (const existingMatch of existingConfirmedMatches) {
+            if (!existingMatch.date) continue;
+            if (
+              existingMatch.venue?.trim().toLocaleLowerCase() ===
+                venue.toLocaleLowerCase() &&
+              existingMatch.date.getTime() === kickoffAt.getTime()
+            ) {
+              throw new CompetitionError(
+                'A physical draw fixture collides with an existing tournament match at this venue and kickoff.',
+                422,
+                'PHYSICAL_DRAW_EXISTING_VENUE_COLLISION',
+                { slot: pairing.slot, venue }
+              );
+            }
+            const sharesTeam =
+              participantTeamIds.has(existingMatch.homeTeam.toString()) ||
+              participantTeamIds.has(existingMatch.awayTeam.toString());
+            if (
+              sharesTeam &&
+              competitionLocalCalendarDay(existingMatch.date) === localDay
+            ) {
+              throw new CompetitionError(
+                'A physical draw team already has another tournament match on this local calendar day.',
+                422,
+                'PHYSICAL_DRAW_TEAM_DAY_COLLISION',
+                { slot: pairing.slot, localDay }
+              );
+            }
+          }
+          venueKickoffs.add(collisionKey);
+        } else if (pairing.kickoffAt !== null || pairing.venue !== null) {
+          throw new CompetitionError(
+            'A physical draw fixture must provide both kickoffAt and venue, or leave both pending.',
+            422,
+            'PHYSICAL_DRAW_SCHEDULE_INCOMPLETE',
+            { slot: pairing.slot }
+          );
+        }
+
+        return {
+          slot: pairing.slot,
+          homeEntryId: home.tournamentEntryId,
+          awayEntryId: away.tournamentEntryId,
+          homeTeamId: home.teamId,
+          awayTeamId: away.teamId,
+          kickoffAt,
+          venue,
+          scheduleStatus: kickoffAt
+            ? MatchScheduleStatus.CONFIRMED
+            : MatchScheduleStatus.PENDING,
+        };
+      });
+      if (usedEntryIds.size !== qualifierCount) {
+        throw new CompetitionError(
+          'The physical draw must use all eight finalized qualifiers exactly once.',
+          422,
+          'PHYSICAL_DRAW_INCOMPLETE'
+        );
+      }
+
+      const stage = MatchStage.QUARTER_FINALS;
+      const mode = CompetitionDrawMode.MANUAL;
+      const planHash = hashValue({
+        tournamentId,
+        stage,
+        sourceReference: input.sourceReference?.trim() ?? null,
+        pairings: normalizedPairings.map((pairing) => ({
+          slot: pairing.slot,
+          homeEntryId: pairing.homeEntryId.toString(),
+          awayEntryId: pairing.awayEntryId.toString(),
+          homeTeamId: pairing.homeTeamId.toString(),
+          awayTeamId: pairing.awayTeamId.toString(),
+          kickoffAt: pairing.kickoffAt?.toISOString() ?? null,
+          venue: pairing.venue ?? null,
+          scheduleStatus: pairing.scheduleStatus,
+        })),
+      });
 
       const latestDraw = await CompetitionDraw.findOne({
         tournamentId,
@@ -2145,13 +2609,9 @@ export const createKnockoutDraw = async (
               groupKey: entry.groupKey,
               groupRank: entry.rank,
             })),
-            pairings: pairings.map((pairing, index) => ({
-              slot: index + 1,
-              homeEntryId: pairing.home.entryId,
-              awayEntryId: pairing.away.entryId,
-              homeTeamId: pairing.home.teamId,
-              awayTeamId: pairing.away.teamId,
-            })),
+            pairings: normalizedPairings,
+            planHash,
+            sourceReference: input.sourceReference?.trim(),
             rulesSnapshot: toPlainObject(rules) as unknown as Record<string, unknown>,
             createdBy: adminId,
           },
@@ -2190,7 +2650,7 @@ export const publishKnockoutDraw = async (
   requireObjectId(drawId, 'draw ID');
   return runIdempotentTransaction(
     tournamentId,
-    'publish_knockout_draw',
+    'publish_physical_knockout_draw',
     idempotencyKey,
     { drawId, expectedRevision },
     async (session) => {
@@ -2198,7 +2658,7 @@ export const publishKnockoutDraw = async (
       assertExpectedRevision(tournament.workflowRevision, expectedRevision);
       if (tournament.workflowState !== CompetitionWorkflowState.QUALIFICATION_FINALIZED) {
         throw new CompetitionError(
-          'The tournament is not ready to publish a knockout draw',
+          'The tournament is not ready to publish a physical knockout draw',
           409,
           'INVALID_WORKFLOW_STATE'
         );
@@ -2212,87 +2672,191 @@ export const publishKnockoutDraw = async (
       if (!draw) throw new CompetitionError('Draw not found', 404, 'DRAW_NOT_FOUND');
       if (draw.status === CompetitionDrawStatus.SUPERSEDED) {
         throw new CompetitionError(
-          'This draw was superseded by a newer draft',
+          'This physical draw was superseded by a newer draft',
           409,
           'DRAW_SUPERSEDED'
         );
       }
       if (draw.status !== CompetitionDrawStatus.DRAFT) {
         throw new CompetitionError(
-          'Only the current draft draw can be published',
+          'Only the current physical draft can be published',
           409,
           'DRAW_NOT_PUBLISHABLE'
         );
       }
-      if (draw.pairings.length * 2 !== draw.inputSnapshot.length) {
-        throw new CompetitionError('Draft draw is incomplete', 409, 'INCOMPLETE_DRAW');
-      }
+
       const ruleIssues = getRuleBlockingIssues(tournament.competitionRules!);
-      if (ruleIssues.length > 0) {
-        throw new CompetitionError(
-          'The tournament does not match the fixed v2 competition rules.',
-          409,
-          'INVALID_V2_RULES',
-          ruleIssues
-        );
-      }
       if (
+        ruleIssues.length > 0 ||
         draw.stage !== MatchStage.QUARTER_FINALS ||
-        draw.mode !== CompetitionDrawMode.SEEDED_CROSS_GROUP ||
-        draw.inputSnapshot.length !== 8
+        draw.mode !== CompetitionDrawMode.MANUAL ||
+        draw.inputSnapshot.length !== 8 ||
+        draw.pairings.length !== 4
       ) {
         throw new CompetitionError(
-          'Only the fixed eight-team seeded quarterfinal draw can be published.',
+          'Only a complete manually recorded eight-team quarter-final draw can be published.',
           409,
-          'INVALID_FIXED_DRAW'
-        );
-      }
-      let expectedPairings: ReturnType<typeof createSeededCrossGroupPairings>;
-      try {
-        expectedPairings = createSeededCrossGroupPairings(
-          draw.inputSnapshot.map((entry) => ({
-            entryId: entry.tournamentEntryId.toString(),
-            teamId: entry.teamId.toString(),
-            groupKey: entry.groupKey,
-            rank: entry.groupRank,
-          }))
-        );
-      } catch (error) {
-        throw new CompetitionError(
-          error instanceof Error ? error.message : 'The saved draw seed data is invalid.',
-          409,
-          'INVALID_FIXED_DRAW'
-        );
-      }
-      const savedPairings = [...draw.pairings].sort((left, right) => left.slot - right.slot);
-      if (
-        savedPairings.some(
-          (pairing, index) =>
-            pairing.slot !== index + 1 ||
-            pairing.homeEntryId.toString() !== expectedPairings[index].home.entryId ||
-            pairing.awayEntryId.toString() !== expectedPairings[index].away.entryId ||
-            pairing.homeTeamId.toString() !== expectedPairings[index].home.teamId ||
-            pairing.awayTeamId.toString() !== expectedPairings[index].away.teamId
-        )
-      ) {
-        throw new CompetitionError(
-          'The saved draw does not match A1-B4, A2-B3, B1-A4, B2-A3.',
-          409,
-          'FIXED_DRAW_PAIRING_MISMATCH'
+          'INVALID_PHYSICAL_DRAW',
+          { ruleIssues }
         );
       }
 
-      const venues = await Venue.find({ isDeleted: false })
-        .sort({ importance: 1, name: 1 })
+      const inputByEntryId = new Map(
+        draw.inputSnapshot.map((entry) => [entry.tournamentEntryId.toString(), entry])
+      );
+      const usedEntryIds = new Set<string>();
+      const sortedPairings = [...draw.pairings].sort((left, right) => left.slot - right.slot);
+      const activeVenueByKey = await fenceCompetitionVenueNames(
+        sortedPairings.flatMap((pairing) =>
+          pairing.kickoffAt instanceof Date && pairing.venue ? [pairing.venue] : []
+        ),
+        session
+      );
+      const existingConfirmedMatches = await Match.find({
+        tournamentId,
+        isDeleted: false,
+        scheduleStatus: MatchScheduleStatus.CONFIRMED,
+        date: { $exists: true },
+      })
+        .select('homeTeam awayTeam date venue')
         .session(session)
         .lean();
-      const lastMatch = await Match.findOne({ tournamentId, isDeleted: false })
-        .sort({ date: -1 })
-        .session(session)
-        .lean();
-      if (venues.length === 0) {
-        throw new CompetitionError('At least one active venue is required', 409, 'NO_ACTIVE_VENUES');
+      const venueKickoffs = new Set<string>();
+      const canonicalPairings = sortedPairings.map((pairing, index) => {
+        const home = inputByEntryId.get(pairing.homeEntryId.toString());
+        const away = inputByEntryId.get(pairing.awayEntryId.toString());
+        if (
+          pairing.slot !== index + 1 ||
+          !home ||
+          !away ||
+          pairing.homeEntryId.toString() === pairing.awayEntryId.toString() ||
+          usedEntryIds.has(pairing.homeEntryId.toString()) ||
+          usedEntryIds.has(pairing.awayEntryId.toString()) ||
+          pairing.homeTeamId.toString() !== home.teamId.toString() ||
+          pairing.awayTeamId.toString() !== away.teamId.toString()
+        ) {
+          throw new CompetitionError(
+            'The saved physical draw does not use every finalized qualifier exactly once.',
+            409,
+            'PHYSICAL_DRAW_PAIRING_MISMATCH',
+            { slot: pairing.slot }
+          );
+        }
+        usedEntryIds.add(pairing.homeEntryId.toString());
+        usedEntryIds.add(pairing.awayEntryId.toString());
+
+        const hasKickoff = pairing.kickoffAt instanceof Date;
+        const savedVenue = pairing.venue?.trim();
+        const hasVenue = Boolean(savedVenue);
+        if (
+          hasKickoff !== hasVenue ||
+          pairing.scheduleStatus !==
+            (hasKickoff ? MatchScheduleStatus.CONFIRMED : MatchScheduleStatus.PENDING)
+        ) {
+          throw new CompetitionError(
+            'A saved physical draw schedule must be fully confirmed or fully pending.',
+            409,
+            'PHYSICAL_DRAW_SCHEDULE_INVALID',
+            { slot: pairing.slot }
+          );
+        }
+        let venue: string | undefined;
+        if (hasKickoff) {
+          venue = activeVenueByKey.get(savedVenue!.toLocaleLowerCase());
+          if (!venue) {
+            throw new CompetitionError(
+              'A confirmed physical draw fixture no longer uses an active venue.',
+              409,
+              'PHYSICAL_DRAW_VENUE_INVALID',
+              { slot: pairing.slot, venue: savedVenue }
+            );
+          }
+          const collisionKey = `${venue.toLocaleLowerCase()}:${pairing.kickoffAt!.toISOString()}`;
+          if (venueKickoffs.has(collisionKey)) {
+            throw new CompetitionError(
+              'Two physical draw fixtures cannot use the same venue at the same kickoff.',
+              409,
+              'PHYSICAL_DRAW_VENUE_COLLISION',
+              { slot: pairing.slot, venue }
+            );
+          }
+          const localDay = competitionLocalCalendarDay(pairing.kickoffAt!);
+          const participantTeamIds = new Set([
+            pairing.homeTeamId.toString(),
+            pairing.awayTeamId.toString(),
+          ]);
+          for (const existingMatch of existingConfirmedMatches) {
+            if (!existingMatch.date) continue;
+            if (
+              existingMatch.venue?.trim().toLocaleLowerCase() ===
+                venue.toLocaleLowerCase() &&
+              existingMatch.date.getTime() === pairing.kickoffAt!.getTime()
+            ) {
+              throw new CompetitionError(
+                'A physical draw fixture collides with an existing tournament match at this venue and kickoff.',
+                409,
+                'PHYSICAL_DRAW_EXISTING_VENUE_COLLISION',
+                { slot: pairing.slot, venue }
+              );
+            }
+            const sharesTeam =
+              participantTeamIds.has(existingMatch.homeTeam.toString()) ||
+              participantTeamIds.has(existingMatch.awayTeam.toString());
+            if (
+              sharesTeam &&
+              competitionLocalCalendarDay(existingMatch.date) === localDay
+            ) {
+              throw new CompetitionError(
+                'A physical draw team already has another tournament match on this local calendar day.',
+                409,
+                'PHYSICAL_DRAW_TEAM_DAY_COLLISION',
+                { slot: pairing.slot, localDay }
+              );
+            }
+          }
+          venueKickoffs.add(collisionKey);
+        }
+        return {
+          slot: pairing.slot,
+          homeEntryId: pairing.homeEntryId,
+          awayEntryId: pairing.awayEntryId,
+          homeTeamId: pairing.homeTeamId,
+          awayTeamId: pairing.awayTeamId,
+          kickoffAt: pairing.kickoffAt,
+          venue,
+          scheduleStatus: pairing.scheduleStatus,
+        };
+      });
+      if (usedEntryIds.size !== draw.inputSnapshot.length) {
+        throw new CompetitionError(
+          'The saved physical draw is incomplete.',
+          409,
+          'PHYSICAL_DRAW_INCOMPLETE'
+        );
       }
+      const expectedPlanHash = hashValue({
+        tournamentId,
+        stage: draw.stage,
+        sourceReference: draw.sourceReference?.trim() ?? null,
+        pairings: canonicalPairings.map((pairing) => ({
+          slot: pairing.slot,
+          homeEntryId: pairing.homeEntryId.toString(),
+          awayEntryId: pairing.awayEntryId.toString(),
+          homeTeamId: pairing.homeTeamId.toString(),
+          awayTeamId: pairing.awayTeamId.toString(),
+          kickoffAt: pairing.kickoffAt?.toISOString() ?? null,
+          venue: pairing.venue ?? null,
+          scheduleStatus: pairing.scheduleStatus,
+        })),
+      });
+      if (draw.planHash !== expectedPlanHash) {
+        throw new CompetitionError(
+          'The saved physical draw changed after it was recorded.',
+          409,
+          'PHYSICAL_DRAW_PLAN_CHANGED'
+        );
+      }
+
       const bracketPlan = buildKnockoutBracketPlan(8, false);
       const bracket = new CompetitionBracket({
         tournamentId,
@@ -2302,7 +2866,7 @@ export const publishKnockoutDraw = async (
         revision: expectedRevision + 1,
         nodes: bracketPlan.map((node) => {
           const pairing = node.homeSource.drawPairingSlot
-            ? draw.pairings.find((item) => item.slot === node.homeSource.drawPairingSlot)
+            ? canonicalPairings.find((item) => item.slot === node.homeSource.drawPairingSlot)
             : undefined;
           return {
             ...node,
@@ -2325,35 +2889,40 @@ export const publishKnockoutDraw = async (
         }),
       });
       await bracket.save({ session });
-      const firstDate = nextSaturdayAfter(lastMatch?.date ?? tournament.startDate);
       const firstRoundNodes = bracket.nodes
         .filter((node) => node.stage === draw.stage)
         .sort((left, right) => left.slot - right.slot);
       if (
-        firstRoundNodes.length !== draw.pairings.length ||
+        firstRoundNodes.length !== canonicalPairings.length ||
         firstRoundNodes.some((node) => !node.homeTeamId || !node.awayTeamId)
       ) {
         throw new CompetitionError(
-          'The durable bracket does not match the published draw',
+          'The durable bracket does not match the published physical draw',
           409,
           'BRACKET_DRAW_MISMATCH'
         );
       }
-      const matchPayloads = firstRoundNodes.map((node, index) => {
-        const date = new Date(firstDate);
-        const venueIndex = index % venues.length;
-        const timeSlot = Math.floor(index / venues.length);
-        date.setUTCHours(10 + timeSlot * 2, 0, 0, 0);
+
+      const publishedAt = new Date();
+      const matchPayloads = firstRoundNodes.map((node) => {
+        const pairing = canonicalPairings.find((item) => item.slot === node.slot)!;
         return {
           tournamentId,
           homeTeam: node.homeTeamId,
           awayTeam: node.awayTeamId,
-          date,
-          venue: venues[venueIndex].name,
+          date: pairing.kickoffAt,
+          venue: pairing.venue,
+          scheduleStatus: pairing.scheduleStatus,
           stage: draw.stage,
           status: MatchStatus.SCHEDULED,
           round: 1,
           fixtureKey: `${tournamentId}:knockout:${draw.stage}:M${node.slot}`,
+          officialFixtureNumber: 42 + node.slot,
+          fixtureSource: MatchFixtureSource.PHYSICAL_OFFICIAL,
+          fixturePublicationHash: draw.planHash,
+          fixtureSourceReference: draw.sourceReference,
+          fixturePublishedBy: adminId,
+          fixturePublishedAt: publishedAt,
           drawId: draw._id,
           bracketId: bracket._id,
           bracketNodeKey: node.key,
@@ -2373,7 +2942,7 @@ export const publishKnockoutDraw = async (
 
       draw.status = CompetitionDrawStatus.PUBLISHED;
       draw.publishedBy = adminId ? new Types.ObjectId(adminId) : undefined;
-      draw.publishedAt = new Date();
+      draw.publishedAt = publishedAt;
       await draw.save({ session });
 
       const updated = await updateTournamentWithRevision(
@@ -2390,6 +2959,12 @@ export const publishKnockoutDraw = async (
         bracketId: bracket._id.toString(),
         stage: draw.stage,
         fixtureCount: matchDocs.length,
+        confirmedCount: matchDocs.filter(
+          (match) => match.scheduleStatus === MatchScheduleStatus.CONFIRMED
+        ).length,
+        pendingCount: matchDocs.filter(
+          (match) => match.scheduleStatus === MatchScheduleStatus.PENDING
+        ).length,
         workflowRevision: updated.workflowRevision,
       };
     }
@@ -2463,6 +3038,7 @@ const rethrowProgressionError = (error: unknown): never => {
 export const progressKnockout = async (
   tournamentId: string,
   expectedRevision: number,
+  adminId: string | undefined,
   idempotencyKey?: string
 ) =>
   runIdempotentTransaction(
@@ -2479,6 +3055,31 @@ export const progressKnockout = async (
           'Publish the first knockout draw before progressing the bracket',
           409,
           'BRACKET_NOT_CREATED'
+        );
+      }
+      if (bracket.status !== CompetitionBracketStatus.ACTIVE) {
+        throw new CompetitionError(
+          'Only an active physical bracket can be progressed.',
+          409,
+          'BRACKET_NOT_ACTIVE'
+        );
+      }
+      const sourceDraw = await CompetitionDraw.findOne({
+        _id: bracket.sourceDrawId,
+        tournamentId,
+        type: CompetitionDrawType.KNOCKOUT,
+        stage: MatchStage.QUARTER_FINALS,
+        status: CompetitionDrawStatus.PUBLISHED,
+        mode: CompetitionDrawMode.MANUAL,
+      })
+        .select('_id')
+        .session(session)
+        .lean();
+      if (!sourceDraw) {
+        throw new CompetitionError(
+          'The active bracket no longer references its published physical quarter-final draw.',
+          409,
+          'BRACKET_SOURCE_DRAW_INVALID'
         );
       }
       const ruleIssues = getRuleBlockingIssues(tournament.competitionRules!);
@@ -2683,6 +3284,20 @@ export const progressKnockout = async (
         stage: tournament.currentStage,
         isDeleted: false,
       }).session(session);
+      if (
+        currentMatches.some(
+          (match) =>
+            match.scheduleStatus !== MatchScheduleStatus.CONFIRMED ||
+            !match.date ||
+            !match.venue
+        )
+      ) {
+        throw new CompetitionError(
+          'Every current-round match must have a confirmed physical schedule before its result can advance the bracket.',
+          409,
+          'KNOCKOUT_SCHEDULE_INCOMPLETE'
+        );
+      }
       const matchResults = currentMatches.map((match) => ({
         nodeKey: match.bracketNodeKey ?? '',
         status: match.status,
@@ -2806,40 +3421,30 @@ export const progressKnockout = async (
         };
       }
 
-      const venues = await Venue.find({ isDeleted: false })
-        .sort({ importance: 1, name: 1 })
-        .session(session)
-        .lean();
-      if (venues.length === 0) {
-        throw new CompetitionError('At least one active venue is required', 409, 'NO_ACTIVE_VENUES');
-      }
-      const lastCurrentDate = new Date(
-        Math.max(...currentMatches.map((match) => match.date.getTime()))
-      );
-      const firstDate = nextSaturdayAfter(lastCurrentDate);
-      const includesThirdPlace = progression.fixtures.some(
-        (fixture) => fixture.kind === 'third_place'
-      );
-      let championshipIndex = 0;
-      let thirdPlaceIndex = 0;
+      const advancedAt = new Date();
       const matchPayloads = progression.fixtures.map((fixture) => {
-        const thirdPlace = fixture.kind === 'third_place';
-        const dailyIndex = thirdPlace ? thirdPlaceIndex++ : championshipIndex++;
-        const date = new Date(firstDate);
-        if (includesThirdPlace && !thirdPlace) date.setUTCDate(date.getUTCDate() + 1);
-        const venueIndex = dailyIndex % venues.length;
-        const timeSlot = Math.floor(dailyIndex / venues.length);
-        date.setUTCHours(10 + timeSlot * 2, 0, 0, 0);
+        const stage = fixture.stage as MatchStage;
+        const publicationHash = hashValue({
+          tournamentId,
+          bracketId: bracket._id.toString(),
+          nodeKey: fixture.nodeKey,
+          homeTeamId: fixture.homeTeamId,
+          awayTeamId: fixture.awayTeamId,
+        });
         return {
           tournamentId,
           homeTeam: fixture.homeTeamId,
           awayTeam: fixture.awayTeamId,
-          date,
-          venue: venues[venueIndex].name,
-          stage: fixture.stage as MatchStage,
+          scheduleStatus: MatchScheduleStatus.PENDING,
+          stage,
           status: MatchStatus.SCHEDULED,
           round: 1,
           fixtureKey: `${tournamentId}:knockout:${fixture.stage}:M${fixture.slot}`,
+          officialFixtureNumber: officialFixtureNumberForBracketNode(stage, fixture.slot),
+          fixtureSource: MatchFixtureSource.PHYSICAL_OFFICIAL,
+          fixturePublicationHash: publicationHash,
+          fixturePublishedBy: adminId,
+          fixturePublishedAt: advancedAt,
           bracketId: bracket._id,
           bracketNodeKey: fixture.nodeKey,
           bracketSlot: fixture.slot,
@@ -2870,16 +3475,21 @@ export const progressKnockout = async (
         session
       );
       return {
-        action: 'round_materialized' as const,
+        action: 'round_advanced' as const,
         stage: progression.nextStage,
         fixtureCount: createdMatches.length,
+        confirmedCount: 0,
+        pendingCount: createdMatches.length,
         fixtures: createdMatches.map((match) => ({
           matchId: match._id.toString(),
           bracketNodeKey: match.bracketNodeKey,
           stage: match.stage,
           homeTeamId: match.homeTeam.toString(),
           awayTeamId: match.awayTeam.toString(),
-          date: match.date,
+          officialFixtureNumber: match.officialFixtureNumber,
+          kickoffAt: null,
+          venue: null,
+          scheduleStatus: match.scheduleStatus,
         })),
         workflowRevision: updated.workflowRevision,
       };

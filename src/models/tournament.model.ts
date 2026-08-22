@@ -75,8 +75,8 @@ export const FIXED_V2_COMPETITION_RULES: Readonly<ICompetitionRules> = Object.fr
     CompetitionTieBreaker.HEAD_TO_HEAD,
     CompetitionTieBreaker.COMMITTEE_DECISION,
   ]) as unknown as CompetitionTieBreaker[],
-  drawMode: CompetitionDrawMode.SEEDED_CROSS_GROUP,
-  avoidSameGroupFirstRound: true,
+  drawMode: CompetitionDrawMode.MANUAL,
+  avoidSameGroupFirstRound: false,
   thirdPlaceMatch: false,
   maxRosterPlayers: 10,
 });
@@ -123,6 +123,7 @@ export interface ITournament extends Document {
   entryIdentityRevision: number;
   rosterIdentityRevision: number;
   standingsRevision: number;
+  scheduleRevision: number;
   competitionRules?: ICompetitionRules;
   competitionTieResolutions: ICompetitionTieResolution[];
   qualificationSnapshot: IQualifiedEntrySnapshot[];
@@ -149,9 +150,9 @@ const competitionRulesSchema = new Schema<ICompetitionRules>(
     drawMode: {
       type: String,
       enum: [...Object.values(CompetitionDrawMode), null],
-      default: CompetitionDrawMode.SEEDED_CROSS_GROUP,
+      default: CompetitionDrawMode.MANUAL,
     },
-    avoidSameGroupFirstRound: { type: Boolean, default: true },
+    avoidSameGroupFirstRound: { type: Boolean, default: false },
     thirdPlaceMatch: { type: Boolean, default: false },
     maxRosterPlayers: { type: Number, min: 1, max: 100, default: 10 },
   },
@@ -288,6 +289,12 @@ const tournamentSchema = new Schema<ITournament>(
       type: Number,
       min: 0,
       default: 0,
+    },
+    scheduleRevision: {
+      type: Number,
+      min: 0,
+      default: 0,
+      select: false,
     },
     competitionRules: {
       type: competitionRulesSchema,
