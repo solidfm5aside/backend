@@ -84,7 +84,11 @@ app.get('/', (req: Request, res: Response) => {
 
 // Health check
 app.get('/health', (req: Request, res: Response) => {
-  res.status(200).json({ status: 'OK', timestamp: new Date().toISOString() });
+  res.status(200).json({
+    status: 'OK',
+    timestamp: new Date().toISOString(),
+    capabilities: ['official-womens-fixture-import-v1'],
+  });
 });
 
 // Error handling
