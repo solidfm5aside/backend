@@ -15,8 +15,8 @@
     "db:indexes:sync": "ts-node -r tsconfig-paths/register src/scripts/sync-empty-reset-indexes.ts --execute",
     "db:official-2026:plan": "ts-node -r tsconfig-paths/register src/scripts/migrate-official-2026-fixtures.ts",
     "db:official-2026:migrate": "ts-node -r tsconfig-paths/register src/scripts/migrate-official-2026-fixtures.ts --execute",
-    "db:womens-division:plan": "ts-node -r tsconfig-paths/register src/scripts/tag-official-womens-teams.ts",
-    "db:womens-division:migrate": "ts-node -r tsconfig-paths/register src/scripts/tag-official-womens-teams.ts --execute"
+    "db:womens-tournament:plan": "ts-node -r tsconfig-paths/register src/scripts/convert-official-womens-tournament.ts",
+    "db:womens-tournament:convert": "ts-node -r tsconfig-paths/register src/scripts/convert-official-womens-tournament.ts --execute"
   },
   "keywords": [],
   "author": "",

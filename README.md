@@ -221,7 +221,7 @@ groups, dates, venues, schedule states, and provenance fields is compared with
 the pinned manifest before success is reported. The command never prints the
 MongoDB URI or application secrets.
 
-## Guarded women-team division tagging
+## Guarded official women-tournament conversion
 
 `Team.division` and `Tournament.division` are explicit (`men` or `women`). A
 legacy team/tournament with a missing or `null` division is interpreted as men
@@ -229,23 +229,48 @@ at read time; the application does not rewrite those rows. The women format
 accepts only women teams, the men format accepts only effective-men teams, and
 player transfers across divisions are rejected transactionally.
 
-The one-time tagging utility targets only these exact ID/name pairs:
+There is one dry-run-first conversion runbook. It targets only tournament
+`6a8a1c47508de0e7425195a4`, whose audited immutable identity is:
 
-- `6a8a1ec9508de0e7425195a6` — `NYSC WOMEN TEAM`
-- `6a8a1f1f508de0e7425195a7` — `RANGERS INTERNATIONAL WOMEN`
-- `6a8a1ea3508de0e7425195a5` — `ZOHAR FA`
+- name: `COJUDESOLIDFM5-ASIDE FOOTBALL TOURNAMENT(WOMEN)`
+- season: `2026`
+- start: `2026-08-23T00:00:00.000Z`
+- end: `2026-10-17T00:00:00.000Z`
+
+It also pins the three existing admin-created entry/team pairs and their
+audited entry creation order:
+
+1. entry `6a8a1f82508de0e7425195a8`, team
+   `6a8a1f1f508de0e7425195a7` — `RANGERS INTERNATIONAL WOMEN`
+2. entry `6a8a1fa1508de0e7425195a9`, team
+   `6a8a1ec9508de0e7425195a6` — `NYSC WOMEN TEAM`
+3. entry `6a8a1fb1508de0e7425195aa`, team
+   `6a8a1ea3508de0e7425195a5` — `ZOHAR FA`
+
+The manifest additionally pins each entry's original Cloudinary logo snapshot,
+creator admin ID, and exact creation/update timestamps. Those audit fields are
+preserved byte-for-byte. The internal table slots are administrative display
+positions only; they do not seed or rank the teams.
 
 It is dry-run-only by default and must be reviewed before any execution:
 
 ```bash
-npm run db:womens-division:plan
+npm run db:womens-tournament:plan
 ```
 
-The plan fails closed unless all exact targets exist, names and registered
-states match, `isDeleted` is explicitly `false`, the current division is a
-supported legacy/men/women value, and every row that still needs changing has
-no semantically active player or tournament-entry dependency. Missing or
-`null` dependency `isDeleted` fields are treated as active, not deleted.
+The source plan fails closed unless the tournament is exactly format v2
+(`two_group_knockout`), `upcoming`, `setup` at workflow revision 3, has the
+fixed men rules, has no fixtures, and contains exactly those three active admin
+entries and no other entry. It requires zero players and no matches, standings,
+tournament rosters, draws, brackets, operations, player stats, or women-final records. An
+already exact v3 state (`single_table_final`, `entries_ready`, revision 4) is a
+verified no-op; this no-op remains valid if ordinary team players were added
+after conversion.
+
+The dry run prints a read-only SHA-256 for the official men tournament using
+the converter's canonical algorithm. Copy that exact value into the execution
+command. Historical checksums made with a different serialization algorithm
+are not interchangeable.
 
 Before execution, create and independently verify a restorable database backup,
 compute the backup artifact's SHA-256 from its bytes, and retain the artifact
@@ -253,31 +278,49 @@ outside the application deployment. Execution requires all temporary gates,
 the exact connected database name, a safe artifact basename, and the exact
 64-character SHA-256:
 
+Pause admin and match-result writes before taking that backup, and keep them
+paused through the fresh dry run, conversion, receipt capture, and post-commit
+verification. This prevents a legitimate concurrent men result from changing
+the explicitly confirmed men-state checksum after the women-only transaction.
+
 ```bash
-WOMENS_DIVISION_MIGRATION_ALLOW_EXECUTE=true \
-WOMENS_DIVISION_MIGRATION_BACKUP_VERIFIED=true \
-npm run db:womens-division:migrate -- \
+WOMENS_TOURNAMENT_CONVERSION_ALLOW_EXECUTE=true \
+WOMENS_TOURNAMENT_CONVERSION_INVENTORY_VERIFIED=true \
+WOMENS_TOURNAMENT_CONVERSION_BACKUP_VERIFIED=true \
+npm run db:womens-tournament:convert -- \
   --confirm-db=<exact-connected-database-name> \
+  --confirm-tournament=6a8a1c47508de0e7425195a4 \
+  --confirm-tournament-name="COJUDESOLIDFM5-ASIDE FOOTBALL TOURNAMENT(WOMEN)" \
+  --confirm-men-sha256=<exact-sha256-from-the-fresh-dry-run> \
   --backup-artifact=<safe-backup-basename> \
   --backup-sha256=<independently-computed-64-character-sha256>
 ```
 
 Production also requires the temporary
-`WOMENS_DIVISION_MIGRATION_ALLOW_PRODUCTION=true` gate. The transaction re-reads
-all three targets and dependencies, acquires exact lifecycle compare-and-set
-fences in deterministic ID order, skips already-women rows without bumping
-their revision, and rechecks dependencies before commit. It prints a structured
-before/fence/after receipt containing only the safe backup basename and SHA;
-capture that output in the deployment record and retain it with the backup.
-The utility never tags any other team and must not be run against the live
-database merely to test it.
+`WOMENS_TOURNAMENT_CONVERSION_ALLOW_PRODUCTION=true` gate. Before any write, the
+transaction re-reads the complete manifest, confirms the CLI-pinned men-state
+hash, and acquires exact raw compare-and-set fences for the tournament, all
+three teams, and all three entry `__v` values. It tags only those teams as
+women, assigns internal group `A` and table slots 1–3 without replacing the
+entry documents or snapshots, and converts the tournament to the fixed women
+v3 rules at `entries_ready` revision 4. Name, season, dates, entry creator,
+logos, and timestamps are preserved. Status is `upcoming` before the start
+instant and otherwise `ongoing`; competition completion remains owned by the
+final workflow.
+
+The receipt contains the true transaction pre-write snapshot, transaction
+post-write snapshot, post-commit snapshot, backup basename/SHA, exact changed
+IDs, and one canonical men-state checksum before and after. Capture stdout in
+the approved deployment record and retain it with the independently verified
+backup. The converter never prints the MongoDB URI or application secrets and
+must not be run against live merely to test it.
 
 If any precondition or post-check fails before commit, the transaction aborts.
-After a successful commit, do not blindly reverse the division fields: first
-stop writes and compare the retained receipt with current player/entry
-dependencies. Restore the independently verified full backup only in an
-approved maintenance window, or apply a separately reviewed conditional CAS
-correction when the exact receipt targets have acquired no incompatible data.
+After a successful commit, do not blindly reverse the format, divisions, or
+entry slots. Stop writes, retain the receipt, and inspect all dependencies. Use
+the verified full backup only in an approved maintenance window, or prepare a
+separately reviewed conditional CAS rollback against the receipt's exact
+post-write versions when the women workflow has acquired no new data.
 
 ---
 
