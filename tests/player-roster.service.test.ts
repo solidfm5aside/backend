@@ -25,9 +25,30 @@ jest.mock('@/services/team-lifecycle.service', () => ({
   fenceTeamLifecycle: jest.fn().mockResolvedValue({ _id: 'team' }),
 }));
 
+jest.mock('@/services/womens-late-roster.service', () => {
+  class WomensLateRosterError extends Error {
+    constructor(
+      message: string,
+      public readonly statusCode: number,
+      public readonly code: string
+    ) {
+      super(message);
+    }
+  }
+  return {
+    enrollPlayerInUnstartedWomensCompetitions: jest.fn().mockResolvedValue({
+      enrolledTournamentIds: [],
+      alreadyEnrolledTournamentIds: [],
+      excludedTournamentIds: [],
+    }),
+    WomensLateRosterError,
+  };
+});
+
 import mongoose from 'mongoose';
 import Player from '@/models/player.model';
 import { fenceTeamLifecycle } from '@/services/team-lifecycle.service';
+import { enrollPlayerInUnstartedWomensCompetitions } from '@/services/womens-late-roster.service';
 import {
   createPlayerInAvailableRosterSlot,
   MAX_TEAM_ROSTER_SIZE,
@@ -45,6 +66,10 @@ const mockedPlayer = Player as unknown as jest.Mock & {
 const mockedFenceTeamLifecycle = fenceTeamLifecycle as jest.MockedFunction<
   typeof fenceTeamLifecycle
 >;
+const mockedLateEnrollment =
+  enrollPlayerInUnstartedWomensCompetitions as jest.MockedFunction<
+    typeof enrollPlayerInUnstartedWomensCompetitions
+  >;
 const mockedStartSession = mongoose.startSession as jest.MockedFunction<
   typeof mongoose.startSession
 >;
@@ -105,6 +130,51 @@ describe('atomic team roster slot allocation', () => {
     expect(mockedFenceTeamLifecycle).toHaveBeenCalledWith('team-1', expect.anything());
   });
 
+  it('captures a new women player only after taking the shared Team lifecycle fence', async () => {
+    const created = { _id: 'player-2', __v: 0 };
+    const callOrder: string[] = [];
+    mockedFenceTeamLifecycle.mockImplementationOnce(async () => {
+      callOrder.push('team-fence');
+      return { _id: 'team-1', division: CompetitionDivision.WOMEN } as never;
+    });
+    mockedPlayer.__save.mockImplementationOnce(async () => {
+      callOrder.push('player-save');
+      return created;
+    });
+    mockedLateEnrollment.mockImplementationOnce(async () => {
+      callOrder.push('late-enrollment');
+      return {
+        enrolledTournamentIds: ['tournament-1'],
+        alreadyEnrolledTournamentIds: [],
+        excludedTournamentIds: [],
+      };
+    });
+
+    await expect(
+      createPlayerInAvailableRosterSlot({ teamId: 'team-1', name: 'Ada' })
+    ).resolves.toBe(created);
+
+    expect(callOrder).toEqual(['team-fence', 'player-save', 'late-enrollment']);
+    expect(mockedLateEnrollment).toHaveBeenCalledWith(
+      'player-2',
+      'team-1',
+      0,
+      session
+    );
+  });
+
+  it('does not run women late-enrollment queries for a men player create', async () => {
+    mockedFenceTeamLifecycle.mockResolvedValueOnce({
+      _id: 'team-1',
+      division: CompetitionDivision.MEN,
+    } as never);
+    mockedPlayer.__save.mockResolvedValueOnce({ _id: 'player-2', __v: 0 });
+
+    await createPlayerInAvailableRosterSlot({ teamId: 'team-1', name: 'Ada' });
+
+    expect(mockedLateEnrollment).not.toHaveBeenCalled();
+  });
+
   it('migrates legacy slots and rejects an eleventh active player without inserting', async () => {
     mockActivePlayers(
       Array.from({ length: MAX_TEAM_ROSTER_SIZE }, (_, index) => ({
@@ -143,6 +213,30 @@ describe('atomic team roster slot allocation', () => {
         $inc: { competitionRosterRevision: 1, __v: 1 },
       },
       expect.objectContaining({ new: true, runValidators: true, session })
+    );
+  });
+
+  it('late-enrolls an eligible same-division women transfer inside the fenced transaction', async () => {
+    mockedFenceTeamLifecycle.mockResolvedValue({
+      _id: 'team',
+      division: CompetitionDivision.WOMEN,
+    } as never);
+    mockActivePlayers([]);
+    const transferred = { _id: 'player-1', teamId: 'team-2', __v: 5 };
+    mockedPlayer.findOneAndUpdate.mockResolvedValue(transferred);
+
+    await expect(
+      transferPlayerToAvailableRosterSlot(
+        { _id: 'player-1', teamId: 'team-1', isDeleted: false, __v: 4 },
+        { teamId: 'team-2' }
+      )
+    ).resolves.toEqual({ player: transferred, rosterIsFull: false });
+
+    expect(mockedLateEnrollment).toHaveBeenCalledWith(
+      'player-1',
+      'team-2',
+      5,
+      session
     );
   });
 

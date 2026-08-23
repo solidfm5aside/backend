@@ -12,7 +12,6 @@ import {
 } from '@/utils/cloudinary';
 import {
   getOpenPublishedCompetitionsExcludingPlayer,
-  getOpenPublishedCompetitionsForTeam,
   getOpenRosterLocksForPlayer,
   OpenCompetitionReference,
 } from '@/services/player-eligibility.service';
@@ -440,7 +439,10 @@ export const updatePlayer = async (req: Request, res: Response) => {
     let eligibilityUnavailable = false;
     if (teamTransfer) {
       try {
-        excludedTournaments = await getOpenPublishedCompetitionsForTeam(player.teamId.toString());
+        excludedTournaments = await getOpenPublishedCompetitionsExcludingPlayer(
+          player.teamId.toString(),
+          player._id.toString()
+        );
       } catch (eligibilityError) {
         eligibilityUnavailable = true;
         logger.error(

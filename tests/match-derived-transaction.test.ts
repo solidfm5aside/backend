@@ -100,6 +100,7 @@ describe('transactional match mutations and derived statistics', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockedRecalculate.mockResolvedValue(undefined);
+    jest.spyOn(Tournament, 'findOne').mockReturnValue(queryResult(null) as never);
     mockedFenceTeamLifecycles.mockResolvedValue(
       new Map([['available-team', { _id: 'available-team' }]]) as never
     );
@@ -558,6 +559,161 @@ describe('transactional match mutations and derived statistics', () => {
       { session }
     );
     expect(mockedBroadcastUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['zero', []],
+    ['one', ['home']],
+  ])(
+    'blocks a women scheduled-to-live transition when %s participant rosters are populated',
+    async (_label, rosteredSides) => {
+      const session = buildSession();
+      jest.spyOn(mongoose, 'startSession').mockResolvedValue(session as never);
+      const scheduled = buildMatch({ status: MatchStatus.SCHEDULED, __v: 0 });
+      jest.spyOn(Match, 'findById').mockReturnValue(queryResult(scheduled) as never);
+      (Tournament.findOne as jest.Mock).mockReturnValueOnce(
+        queryResult({
+          _id: scheduled.tournamentId,
+          formatVersion: 3,
+          format: TournamentFormat.SINGLE_TABLE_FINAL,
+          division: 'women',
+          fixturesGenerated: true,
+          isDeleted: false,
+        }) as never
+      );
+      mockedFenceTeamLifecycles.mockResolvedValueOnce(
+        new Map([
+          [
+            scheduled.homeTeam.toString(),
+            { _id: scheduled.homeTeam, division: 'women' },
+          ],
+          [
+            scheduled.awayTeam.toString(),
+            { _id: scheduled.awayTeam, division: 'women' },
+          ],
+        ]) as never
+      );
+      const rosteredTeamIds = rosteredSides.map((side) =>
+        side === 'home' ? scheduled.homeTeam : scheduled.awayTeam
+      );
+      jest.spyOn(TournamentRosterEntry, 'find').mockReturnValue(
+        queryResult(rosteredTeamIds) as never
+      );
+      const update = jest.spyOn(Match, 'findOneAndUpdate');
+
+      await expect(
+        updateMatchStatus(scheduled._id.toString(), MatchStatus.LIVE)
+      ).rejects.toThrow(/at least one snapshotted tournament-roster player/i);
+
+      expect(mockedFenceTeamLifecycles).toHaveBeenCalledWith(
+        [scheduled.homeTeam.toString(), scheduled.awayTeam.toString()],
+        session,
+        { registrationStatus: 'registered' }
+      );
+      expect(update).not.toHaveBeenCalled();
+    }
+  );
+
+  it('serializes a valid women match start on the Team fences before reading both rosters', async () => {
+    const session = buildSession();
+    jest.spyOn(mongoose, 'startSession').mockResolvedValue(session as never);
+    const scheduled = buildMatch({ status: MatchStatus.SCHEDULED, __v: 0 });
+    const live = buildMatch({ ...scheduled, status: MatchStatus.LIVE, __v: 1 });
+    jest.spyOn(Match, 'findById').mockReturnValue(queryResult(scheduled) as never);
+    (Tournament.findOne as jest.Mock).mockReturnValueOnce(
+      queryResult({
+        _id: scheduled.tournamentId,
+        formatVersion: 3,
+        format: TournamentFormat.SINGLE_TABLE_FINAL,
+        division: 'women',
+        fixturesGenerated: true,
+        isDeleted: false,
+      }) as never
+    );
+    const order: string[] = [];
+    mockedFenceTeamLifecycles.mockImplementationOnce(async () => {
+      order.push('team-fences');
+      return new Map([
+        [
+          scheduled.homeTeam.toString(),
+          { _id: scheduled.homeTeam, division: 'women' },
+        ],
+        [
+          scheduled.awayTeam.toString(),
+          { _id: scheduled.awayTeam, division: 'women' },
+        ],
+      ]) as never;
+    });
+    jest.spyOn(TournamentRosterEntry, 'find').mockImplementationOnce(() => {
+      order.push('roster-read');
+      return queryResult([scheduled.homeTeam, scheduled.awayTeam]) as never;
+    });
+    jest.spyOn(Match, 'findOneAndUpdate').mockImplementationOnce(() => {
+      order.push('status-cas');
+      return queryResult(live) as never;
+    });
+    jest
+      .spyOn(Tournament, 'updateOne')
+      .mockResolvedValue({ matchedCount: 1, modifiedCount: 1 } as never);
+
+    await expect(
+      updateMatchStatus(scheduled._id.toString(), MatchStatus.LIVE)
+    ).resolves.toBe(live);
+
+    expect(order).toEqual(['team-fences', 'roster-read', 'status-cas']);
+  });
+
+  it.each([
+    ['legacy-missing division', undefined, true, false],
+    ['wrong division', 'men', true, false],
+    ['fixtures not published', 'women', false, false],
+    ['deleted tournament', 'women', true, true],
+  ])(
+    'fails closed for a women v3 match with %s',
+    async (_label, division, fixturesGenerated, isDeleted) => {
+      const session = buildSession();
+      jest.spyOn(mongoose, 'startSession').mockResolvedValue(session as never);
+      const scheduled = buildMatch({ status: MatchStatus.SCHEDULED, __v: 0 });
+      jest.spyOn(Match, 'findById').mockReturnValue(queryResult(scheduled) as never);
+      (Tournament.findOne as jest.Mock).mockReturnValueOnce(
+        queryResult({
+          _id: scheduled.tournamentId,
+          formatVersion: 3,
+          format: TournamentFormat.SINGLE_TABLE_FINAL,
+          division,
+          fixturesGenerated,
+          isDeleted,
+        }) as never
+      );
+      const update = jest.spyOn(Match, 'findOneAndUpdate');
+
+      await expect(
+        updateMatchStatus(scheduled._id.toString(), MatchStatus.LIVE)
+      ).rejects.toThrow(/invalid competition state/i);
+
+      expect(mockedFenceTeamLifecycles).not.toHaveBeenCalled();
+      expect(update).not.toHaveBeenCalled();
+    }
+  );
+
+  it('preserves men scheduled-to-live behavior without roster or Team-fence checks', async () => {
+    const session = buildSession();
+    jest.spyOn(mongoose, 'startSession').mockResolvedValue(session as never);
+    const scheduled = buildMatch({ status: MatchStatus.SCHEDULED, __v: 0 });
+    const live = buildMatch({ ...scheduled, status: MatchStatus.LIVE, __v: 1 });
+    jest.spyOn(Match, 'findById').mockReturnValue(queryResult(scheduled) as never);
+    const rosterRead = jest.spyOn(TournamentRosterEntry, 'find');
+    jest.spyOn(Match, 'findOneAndUpdate').mockReturnValue(queryResult(live) as never);
+    jest
+      .spyOn(Tournament, 'updateOne')
+      .mockResolvedValue({ matchedCount: 1, modifiedCount: 1 } as never);
+
+    await expect(
+      updateMatchStatus(scheduled._id.toString(), MatchStatus.LIVE)
+    ).resolves.toBe(live);
+
+    expect(mockedFenceTeamLifecycles).not.toHaveBeenCalled();
+    expect(rosterRead).not.toHaveBeenCalled();
   });
 
   it.each([

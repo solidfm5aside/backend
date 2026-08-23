@@ -322,52 +322,158 @@ the verified full backup only in an approved maintenance window, or prepare a
 separately reviewed conditional CAS rollback against the receipt's exact
 post-write versions when the women workflow has acquired no new data.
 
+## Guarded official women fixture import
+
+Run this only after the women-tournament conversion reaches the exact v3
+`entries_ready` state at workflow revision 4. The immutable manifest pins the
+reviewed `Womens_Category_Final_Fixtures_Updated.docx` by byte length and
+SHA-256, every raw table cell, the exact three entry/team IDs, and these WAT
+kickoffs:
+
+1. Rangers International Women–Zohar FA, 23 August 2026 at 1:00 PM,
+   `Tribu Arena` (the raw `Opening Ceremony` cell is retained as provenance and
+   the venue is the competition owner's explicit correction).
+2. NYSC Women–Rangers International Women, 12 September 2026 at 4:00 PM,
+   `Tribu Arena`.
+3. NYSC Women–Zohar FA, 27 September 2026 at 4:00 PM, `Tribu Arena`.
+
+For the two `4:00–5:00 PM` source ranges, 4:00 PM is the stored kickoff and
+5:00 PM remains source provenance because the match schema stores no end time.
+The document contains no rank-1 versus rank-2 final schedule, so this importer
+does not create a final, draw, or `CompetitionBracket`.
+
+The plan is read-only by default. It requires the actual source file and one
+exact verified admin/super-admin publisher ID:
+
+```bash
+npm run db:womens-fixtures:plan -- \
+  --source-file="<absolute-path-to-Womens_Category_Final_Fixtures_Updated.docx>" \
+  --publisher-admin-id=<exact-active-admin-object-id>
+```
+
+Review and retain the printed source identity, women inventory SHA-256, plan
+SHA-256, canonical men-state SHA-256, publisher, fixture rows, and per-team
+active-player counts. Zero-player teams are reported prominently but do not
+block fixture publication; the women-only late-enrollment and live-start guard
+owns subsequent player eligibility. More than ten active players on any team
+does block publication.
+
+Pause admin, team/player, scheduling, match-result, and competition-workflow
+writes, create and independently verify a restorable backup, and rerun the
+fresh plan inside that maintenance window.
+Execution requires every temporary gate and every exact value from that plan:
+
+```bash
+WOMENS_FIXTURE_IMPORT_ALLOW_EXECUTE=true \
+WOMENS_FIXTURE_IMPORT_INVENTORY_VERIFIED=true \
+WOMENS_FIXTURE_IMPORT_BACKUP_VERIFIED=true \
+WOMENS_FIXTURE_IMPORT_ALLOW_PRODUCTION=true \
+npm run db:womens-fixtures:import -- \
+  --source-file="<absolute-path-to-Womens_Category_Final_Fixtures_Updated.docx>" \
+  --publisher-admin-id=<exact-active-admin-object-id> \
+  --confirm-publisher-admin-id=<same-admin-object-id> \
+  --confirm-db=<exact-connected-database-name> \
+  --confirm-tournament=6a8a1c47508de0e7425195a4 \
+  --confirm-tournament-name="COJUDESOLIDFM5-ASIDE FOOTBALL TOURNAMENT(WOMEN)" \
+  --confirm-source-sha256=<exact-pinned-source-sha256> \
+  --confirm-inventory-sha256=<exact-sha256-from-fresh-plan> \
+  --confirm-men-sha256=<exact-sha256-from-fresh-plan> \
+  --confirm-plan-sha256=<exact-sha256-from-fresh-plan> \
+  --backup-artifact=<safe-backup-basename> \
+  --backup-sha256=<independently-computed-64-character-sha256> \
+  --confirm=IMPORT-OFFICIAL-WOMENS-2026-FIXTURES
+```
+
+Every execution requires `WOMENS_FIXTURE_IMPORT_ALLOW_PRODUCTION=true`; this
+remains mandatory when `NODE_ENV` is unset because the MongoDB URI can still
+point at the live database. First publication also requires the backup gate and
+backup arguments shown above. The importer rechecks all hashes inside one
+majority-write MongoDB transaction, calls the same session-aware publication
+core as the HTTP API, records one stable idempotency receipt, and verifies that
+its own transaction leaves the canonical men snapshot unchanged.
+The mandatory maintenance pause is what excludes unrelated concurrent men
+writers; MongoDB snapshot reads cannot retroactively roll back the women commit
+if a separate writer changes men after that snapshot. The immediate post-commit
+reread detects and reports such external drift. The importer then verifies the
+exact three matches, three zero-valued standings rows, exact roster-snapshot row
+IDs/player IDs plus strict and immutable hashes, workflow revision, absent
+draw/bracket/final/stats resources, receipt, and men checksum again after commit.
+It never synchronizes indexes, prints the MongoDB URI, or stores the backup
+path—only a safe artifact basename and its verified SHA-256.
+
+A later execution with the same stable receipt is a verification-only replay;
+it never republishes or rewrites records and therefore requires neither a new
+backup nor the backup gate/arguments. The original backup evidence is validated
+from the immutable receipt. Use any currently verified admin/super-admin as the
+replay operator; the original publisher may since have been demoted or deleted,
+and remains separately verified as historical provenance. Replay requires the
+original three league identities, participants, fixture keys, provenance
+hash/reference, publisher, and atomic publication timestamp to remain intact,
+but deliberately allows and reports legitimate later roster additions and
+identity refreshes, tournament/team renames, reschedules, results,
+qualification/final workflow progress, and additional women operations. The
+inventory confirmation may be either the fresh replay-plan value or the exact
+original approved value stored in the receipt, so an already-authorized
+concurrent first publication converges safely to verification. Its men checksum
+is compared with that replay's fresh approved baseline, not the historical
+checksum stored by the first import.
+
+A transaction error commits no importer changes. A failure during the separate
+post-commit verification can occur after a successful write (for example, when
+an unrelated men write violates the maintenance pause). Do not blindly rerun
+or restore after any non-zero exit: retain the console output and backup, run
+the read-only plan, inspect the completed receipt and live state, then use only
+a reviewed rollback or full restore during a new maintenance window if one is
+actually required.
+
 ---
 
 ## 🛠️ API Reference
 
 ### 🔐 Authentication (`/api/v1/auth`)
-| Method | Endpoint | Access | Description |
-| :--- | :--- | :--- | :--- |
-| `POST` | `/register` | Public | Register pending admin; empty-DB bootstrap requires the configured secret |
-| `POST` | `/login` | Public | Authenticate and set HttpOnly access/refresh cookies |
-| `POST` | `/refresh-token` | Public | Refresh the cookie-backed access session |
-| `POST` | `/logout` | Public | Revoke the current session version and clear cookies |
-| `POST` | `/forgot-password` | Public | Trigger password reset email |
-| `PATCH` | `/reset-password/:token` | Public | Complete password reset |
-| `GET` | `/me` | Admin | Validate the current cookie session and return the admin |
-| `GET` | `/` | Super Admin | List all registered staff/admins |
-| `PATCH` | `/admins/:id/role` | Super Admin | Grant or revoke Admin/Super Admin access with last-owner safeguards |
-| `PATCH` | `/verify/:id` | Super Admin | Verify a new admin account |
+
+| Method  | Endpoint                 | Access      | Description                                                               |
+| :------ | :----------------------- | :---------- | :------------------------------------------------------------------------ |
+| `POST`  | `/register`              | Public      | Register pending admin; empty-DB bootstrap requires the configured secret |
+| `POST`  | `/login`                 | Public      | Authenticate and set HttpOnly access/refresh cookies                      |
+| `POST`  | `/refresh-token`         | Public      | Refresh the cookie-backed access session                                  |
+| `POST`  | `/logout`                | Public      | Revoke the current session version and clear cookies                      |
+| `POST`  | `/forgot-password`       | Public      | Trigger password reset email                                              |
+| `PATCH` | `/reset-password/:token` | Public      | Complete password reset                                                   |
+| `GET`   | `/me`                    | Admin       | Validate the current cookie session and return the admin                  |
+| `GET`   | `/`                      | Super Admin | List all registered staff/admins                                          |
+| `PATCH` | `/admins/:id/role`       | Super Admin | Grant or revoke Admin/Super Admin access with last-owner safeguards       |
+| `PATCH` | `/verify/:id`            | Super Admin | Verify a new admin account                                                |
 
 ### 🏆 Tournaments (`/api/v1/tournaments`)
-| Method | Endpoint | Access | Description |
-| :--- | :--- | :--- | :--- |
-| `GET` | `/` | Public | List safe public tournament summaries |
-| `GET` | `/archive` | Public | View historical results |
-| `GET` | `/:id/bracket` | Public | Get knockout stage bracket data |
-| `POST` | `/` | Admin | Create a new tournament season |
-| `PATCH` | `/:id` | Admin | Update tournament details/status |
-| `GET` | `/:id/readiness` | Admin | Verification if teams/players meet requirements |
+
+| Method  | Endpoint         | Access | Description                                     |
+| :------ | :--------------- | :----- | :---------------------------------------------- |
+| `GET`   | `/`              | Public | List safe public tournament summaries           |
+| `GET`   | `/archive`       | Public | View historical results                         |
+| `GET`   | `/:id/bracket`   | Public | Get knockout stage bracket data                 |
+| `POST`  | `/`              | Admin  | Create a new tournament season                  |
+| `PATCH` | `/:id`           | Admin  | Update tournament details/status                |
+| `GET`   | `/:id/readiness` | Admin  | Verification if teams/players meet requirements |
 
 #### 14-team two-group workflow (`/:tournamentId/competition`)
 
-| Method | Endpoint suffix | Access | Description |
-| :--- | :--- | :--- | :--- |
-| `GET` | `/` | Admin | Read workflow state, blockers, entries, progress, and allowed actions |
-| `PATCH` | `/rules` | Admin | Validate the immutable fixed-format rule contract; incompatible values are rejected |
-| `GET/POST` | `/entries` | Admin | List or enroll one of exactly 14 tournament teams |
-| `DELETE` | `/entries/:entryId` | Admin | Remove an entry before fixture publication |
-| `PUT` | `/groups` | Admin | Save the complete seven-team Group A and Group B assignment |
-| `POST` | `/group-fixtures/preview` | Admin | Validate and normalize the admin-supplied 42-row official group plan |
-| `GET` | `/group-fixtures/plan` | Admin | Read the published official plan, or `not_published` with an empty fixture list |
-| `POST` | `/group-fixtures/publish` | Admin | Publish the unchanged validated official plan with `Idempotency-Key` |
-| `GET` | `/standings` | Public | Return independent Group A and Group B standings |
-| `PUT` | `/tie-resolutions` | Admin | Record or correct the committee decision for a still-current tied ranking basis |
-| `POST` | `/qualification/finalize` | Admin | Lock qualifiers after all group results and cutoff ties resolve |
-| `GET/POST` | `/draws` | Admin | List or record all four pairings from the physical quarter-final draw |
-| `POST` | `/draws/:drawId/publish` | Admin | Publish the four recorded pairings as the durable bracket |
-| `POST` | `/knockout/progress` | Admin | Consume completed bracket results, create unscheduled next-round slots, or record the champion |
+| Method     | Endpoint suffix           | Access | Description                                                                                    |
+| :--------- | :------------------------ | :----- | :--------------------------------------------------------------------------------------------- |
+| `GET`      | `/`                       | Admin  | Read workflow state, blockers, entries, progress, and allowed actions                          |
+| `PATCH`    | `/rules`                  | Admin  | Validate the immutable fixed-format rule contract; incompatible values are rejected            |
+| `GET/POST` | `/entries`                | Admin  | List or enroll one of exactly 14 tournament teams                                              |
+| `DELETE`   | `/entries/:entryId`       | Admin  | Remove an entry before fixture publication                                                     |
+| `PUT`      | `/groups`                 | Admin  | Save the complete seven-team Group A and Group B assignment                                    |
+| `POST`     | `/group-fixtures/preview` | Admin  | Validate and normalize the admin-supplied 42-row official group plan                           |
+| `GET`      | `/group-fixtures/plan`    | Admin  | Read the published official plan, or `not_published` with an empty fixture list                |
+| `POST`     | `/group-fixtures/publish` | Admin  | Publish the unchanged validated official plan with `Idempotency-Key`                           |
+| `GET`      | `/standings`              | Public | Return independent Group A and Group B standings                                               |
+| `PUT`      | `/tie-resolutions`        | Admin  | Record or correct the committee decision for a still-current tied ranking basis                |
+| `POST`     | `/qualification/finalize` | Admin  | Lock qualifiers after all group results and cutoff ties resolve                                |
+| `GET/POST` | `/draws`                  | Admin  | List or record all four pairings from the physical quarter-final draw                          |
+| `POST`     | `/draws/:drawId/publish`  | Admin  | Publish the four recorded pairings as the durable bracket                                      |
+| `POST`     | `/knockout/progress`      | Admin  | Consume completed bracket results, create unscheduled next-round slots, or record the champion |
 
 The fixed rules are 14 teams, two manually assigned groups of seven, one group
 leg (six matches/team), top four per group, one-leg quarter-finals through the
@@ -450,22 +556,22 @@ modify or share entries with the men tournament:
 }
 ```
 
-| Method | Endpoint suffix | Access | Description |
-| :--- | :--- | :--- | :--- |
-| `GET` | `/` | Admin | Read women capabilities, readiness, entries, table progress, final state, and allowed actions |
-| `GET/POST` | `/entries` | Admin | List or enroll exactly three women teams; DTOs expose `tableSlot`, never group fields |
-| `DELETE` | `/entries/:entryId` | Admin | Remove an entry before league publication |
-| `POST` | `/league-fixtures/preview` | Admin | Validate the three physically decided single-leg pairings |
-| `GET` | `/league-fixtures/plan` | Admin | Read the published physical league plan or `not_published` |
-| `POST` | `/league-fixtures/publish` | Admin | Publish the unchanged plan with `planHash` and `Idempotency-Key` |
-| `GET` | `/standings` | Public | Return `{ "table": [...] }` for the single table |
-| `GET` | `/ranking` | Admin | Read ranked rows, current tie bases, and qualification readiness |
-| `PUT` | `/table/tie-resolutions` | Admin | Record the committee order for a current whole-table tie basis |
-| `POST` | `/qualification/finalize` | Admin | Lock all three results and snapshot ranks 1 and 2 |
-| `POST` | `/final/preview` | Admin | Validate the physically decided rank-1 versus rank-2 final schedule |
-| `GET` | `/final/plan` | Admin | Read the durable final plan and linked match |
-| `POST` | `/final/publish` | Admin | Publish the unchanged physical final with `planHash` and `Idempotency-Key` |
-| `POST` | `/knockout/progress` | Admin | Lock a completed final and record champion/runner-up; it creates no round |
+| Method     | Endpoint suffix            | Access | Description                                                                                   |
+| :--------- | :------------------------- | :----- | :-------------------------------------------------------------------------------------------- |
+| `GET`      | `/`                        | Admin  | Read women capabilities, readiness, entries, table progress, final state, and allowed actions |
+| `GET/POST` | `/entries`                 | Admin  | List or enroll exactly three women teams; DTOs expose `tableSlot`, never group fields         |
+| `DELETE`   | `/entries/:entryId`        | Admin  | Remove an entry before league publication                                                     |
+| `POST`     | `/league-fixtures/preview` | Admin  | Validate the three physically decided single-leg pairings                                     |
+| `GET`      | `/league-fixtures/plan`    | Admin  | Read the published physical league plan or `not_published`                                    |
+| `POST`     | `/league-fixtures/publish` | Admin  | Publish the unchanged plan with `planHash` and `Idempotency-Key`                              |
+| `GET`      | `/standings`               | Public | Return `{ "table": [...] }` for the single table                                              |
+| `GET`      | `/ranking`                 | Admin  | Read ranked rows, current tie bases, and qualification readiness                              |
+| `PUT`      | `/table/tie-resolutions`   | Admin  | Record the committee order for a current whole-table tie basis                                |
+| `POST`     | `/qualification/finalize`  | Admin  | Lock all three results and snapshot ranks 1 and 2                                             |
+| `POST`     | `/final/preview`           | Admin  | Validate the physically decided rank-1 versus rank-2 final schedule                           |
+| `GET`      | `/final/plan`              | Admin  | Read the durable final plan and linked match                                                  |
+| `POST`     | `/final/publish`           | Admin  | Publish the unchanged physical final with `planHash` and `Idempotency-Key`                    |
+| `POST`     | `/knockout/progress`       | Admin  | Lock a completed final and record champion/runner-up; it creates no round                     |
 
 The fixed women rules are three teams, one single round-robin leg, two matches
 per team (three league matches total), and ranks 1 and 2 in one final. Ranking
@@ -492,14 +598,15 @@ uses a dedicated durable women-final record with qualification-rank sources and
 does not create or alter a men `CompetitionDraw` or `CompetitionBracket`.
 
 ### ⚽ Matches (`/api/v1/matches`)
-| Method | Endpoint | Access | Description |
-| :--- | :--- | :--- | :--- |
-| `GET` | `/` | Public | List matches by match/tournament/status/stage/group/round/leg filters |
-| `PATCH` | `/:id/status` | Admin | Apply a valid scheduled/live/completed/cancelled transition |
-| `PATCH` | `/:id/details` | Admin | Confirm/reschedule with `{date, venue}`, or set both to `null` to mark the schedule pending |
-| `PATCH` | `/:id/winner` | Admin | Atomically set a valid knockout winner and complete the match |
-| `POST` | `/:id/events` | Admin | Add Goal, Yellow, or Red Card with an `Idempotency-Key` |
-| `DELETE` | `/:id/events/:eventId` | Admin | Remove a specific match event |
+
+| Method   | Endpoint               | Access | Description                                                                                 |
+| :------- | :--------------------- | :----- | :------------------------------------------------------------------------------------------ |
+| `GET`    | `/`                    | Public | List matches by match/tournament/status/stage/group/round/leg filters                       |
+| `PATCH`  | `/:id/status`          | Admin  | Apply a valid scheduled/live/completed/cancelled transition                                 |
+| `PATCH`  | `/:id/details`         | Admin  | Confirm/reschedule with `{date, venue}`, or set both to `null` to mark the schedule pending |
+| `PATCH`  | `/:id/winner`          | Admin  | Atomically set a valid knockout winner and complete the match                               |
+| `POST`   | `/:id/events`          | Admin  | Add Goal, Yellow, or Red Card with an `Idempotency-Key`                                     |
+| `DELETE` | `/:id/events/:eventId` | Admin  | Remove a specific match event                                                               |
 
 Pending matches cannot become live/completed, accept events, or accept a
 knockout winner. Rescheduling revalidates the active venue, venue/kickoff
@@ -510,53 +617,61 @@ schedule confirmation share an optimistic venue-version fence so concurrent
 changes fail closed and can be retried safely.
 
 ### 🛡️ Teams & Players (`/api/v1/teams` & `../../players`)
-| Method | Endpoint | Access | Description |
-| :--- | :--- | :--- | :--- |
-| `POST` | `/teams/register` | Public | Public team registration for new seasons |
-| `GET` | `/teams/:id` | Public | Public team profile without private contact data |
-| `GET` | `/teams/admin/:id` | Admin | Private team profile for registration management |
-| `POST` | `/teams` | Admin | Create a team with an optional validated logo upload |
-| `PATCH` | `/teams/:id` | Admin | Update team info, status, and optional logo replacement/removal |
-| `DELETE` | `/teams/:id` | Admin | Soft-delete an unused team; active players/competition entries block deletion |
-| `POST` | `/players` | Admin | Register a player with an optional validated photo upload |
-| `PATCH` | `/players/:id` | Admin | Update or transfer a player and replace/remove the photo safely |
-| `DELETE` | `/players/:id` | Admin | Soft-delete a player and release the roster slot |
-| `GET` | `/players/:id` | Public | Public player profile without passport-photo data |
-| `GET` | `/players/admin` | Admin | Filter players by team and active tournament roster snapshot |
+
+| Method   | Endpoint           | Access | Description                                                                   |
+| :------- | :----------------- | :----- | :---------------------------------------------------------------------------- |
+| `POST`   | `/teams/register`  | Public | Public team registration for new seasons                                      |
+| `GET`    | `/teams/:id`       | Public | Public team profile without private contact data                              |
+| `GET`    | `/teams/admin/:id` | Admin  | Private team profile for registration management                              |
+| `POST`   | `/teams`           | Admin  | Create a team with an optional validated logo upload                          |
+| `PATCH`  | `/teams/:id`       | Admin  | Update team info, status, and optional logo replacement/removal               |
+| `DELETE` | `/teams/:id`       | Admin  | Soft-delete an unused team; active players/competition entries block deletion |
+| `POST`   | `/players`         | Admin  | Register a player with an optional validated photo upload                     |
+| `PATCH`  | `/players/:id`     | Admin  | Update or transfer a player and replace/remove the photo safely               |
+| `DELETE` | `/players/:id`     | Admin  | Soft-delete a player and release the roster slot                              |
+| `GET`    | `/players/:id`     | Public | Public player profile without passport-photo data                             |
+| `GET`    | `/players/admin`   | Admin  | Filter players by team and active tournament roster snapshot                  |
 
 ### 📊 Standings & Statistics (`/api/v1/standings`)
-| Method | Endpoint | Access | Description |
-| :--- | :--- | :--- | :--- |
-| `GET` | `/` | Public | Global league table (aggregate) |
-| `GET` | `/:tournamentId` | Public | Tournament-specific standings |
-| `GET` | `/top-scorers` | Public | Global Golden Boot race (Goals & Assists) |
-| `GET` | `/:tournamentId/top-scorers` | Public | Tournament-specific player statistics |
+
+| Method | Endpoint                     | Access | Description                               |
+| :----- | :--------------------------- | :----- | :---------------------------------------- |
+| `GET`  | `/`                          | Public | Global league table (aggregate)           |
+| `GET`  | `/:tournamentId`             | Public | Tournament-specific standings             |
+| `GET`  | `/top-scorers`               | Public | Global Golden Boot race (Goals & Assists) |
+| `GET`  | `/:tournamentId/top-scorers` | Public | Tournament-specific player statistics     |
 
 ### 📡 Administrative Tools
-| Method | Endpoint | Access | Description |
-| :--- | :--- | :--- | :--- |
-| `POST` | `/api/v1/broadcast` | Admin | Send SMTP Email Alert to all Team Captains |
-| `GET` | `/api/v1/dashboard/stats` | Admin | Aggregate data for the Admin Overview |
-| `PUT` | `/api/v1/settings` | Admin | Toggle Registration & Update Global Banner |
-| `POST` | `/api/v1/settings/upload-...`| Admin | Direct Cloudinary upload for publicity |
+
+| Method | Endpoint                      | Access | Description                                |
+| :----- | :---------------------------- | :----- | :----------------------------------------- |
+| `POST` | `/api/v1/broadcast`           | Admin  | Send SMTP Email Alert to all Team Captains |
+| `GET`  | `/api/v1/dashboard/stats`     | Admin  | Aggregate data for the Admin Overview      |
+| `PUT`  | `/api/v1/settings`            | Admin  | Toggle Registration & Update Global Banner |
+| `POST` | `/api/v1/settings/upload-...` | Admin  | Direct Cloudinary upload for publicity     |
 
 ---
 
 ## 👨‍💻 Developer Guidelines
 
 ### 1. Project Architecture
+
 The project follows a **Controller-Service-Model** pattern:
+
 - **Routes**: Define endpoints and apply middleware.
 - **Controllers**: Handle HTTP concerns (req/res) and validation.
 - **Services**: Contain business logic (Standings calculation, Match scheduling).
 - **Models**: Mongoose schemas enforcing data integrity.
 
 ### 2. Middleware Chain
+
 Most admin routes follow this protection chain:
 `verifyToken` (Authenticates) -> `restrictTo('admin', 'super_admin')` (Authorizes).
 
 ### 3. Error Handling
+
 The API returns standardized JSON error responses:
+
 ```json
 {
   "success": false,
@@ -568,4 +683,5 @@ The API returns standardized JSON error responses:
 ---
 
 ## 📄 License
+
 Private Repository — Intended for use by the **Solid FM 5-Aside Football League**.

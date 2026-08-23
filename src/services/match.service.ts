@@ -20,6 +20,10 @@ import Tournament, {
   TournamentFormat,
   TournamentStatus,
 } from '@/models/tournament.model';
+import {
+  CompetitionDivision,
+  resolveCompetitionDivision,
+} from '@/models/competition-division';
 import Player from '@/models/player.model';
 import Venue from '@/models/venue.model';
 import TournamentRosterEntry from '@/models/tournament-roster-entry.model';
@@ -72,6 +76,62 @@ const markManagedTournamentOngoing = async (
     { $set: { status: TournamentStatus.ONGOING } },
     { session }
   );
+};
+
+/**
+ * Women's late roster capture and match start serialize on the same Team
+ * lifecycle documents. This keeps the zero-roster check in the transaction
+ * that performs scheduled->live and deliberately leaves every men's status
+ * transition unchanged.
+ */
+const assertWomensMatchParticipantsHaveRoster = async (
+  match: IMatch,
+  session: ClientSession
+): Promise<void> => {
+  const tournament = await Tournament.findOne({
+    _id: match.tournamentId,
+  })
+    .select('formatVersion format division fixturesGenerated isDeleted')
+    .session(session)
+    .lean();
+  if (!tournament) return;
+  const isWomensV3Format =
+    tournament.formatVersion === 3 &&
+    tournament.format === TournamentFormat.SINGLE_TABLE_FINAL;
+  if (!isWomensV3Format) return;
+  if (
+    resolveCompetitionDivision(tournament.division) !== CompetitionDivision.WOMEN ||
+    tournament.fixturesGenerated !== true ||
+    tournament.isDeleted === true
+  ) {
+    throw new Error('This women’s match references an invalid competition state');
+  }
+
+  const participantIds = [match.homeTeam.toString(), match.awayTeam.toString()];
+  const fencedTeams = await fenceTeamLifecycles(participantIds, session, {
+    registrationStatus: 'registered',
+  });
+  const unavailableTeamIds = [...fencedTeams.entries()]
+    .filter(
+      ([, team]) =>
+        !team || resolveCompetitionDivision(team.division) !== CompetitionDivision.WOMEN
+    )
+    .map(([teamId]) => teamId);
+  if (unavailableTeamIds.length > 0) {
+    throw new Error('This women’s match references an unavailable participant team');
+  }
+
+  const rosteredTeamIds = await TournamentRosterEntry.find({
+    tournamentId: match.tournamentId,
+    teamId: { $in: participantIds },
+  }).distinct('teamId').session(session);
+  const rostered = new Set(rosteredTeamIds.map((teamId) => teamId.toString()));
+  const emptyTeamIds = participantIds.filter((teamId) => !rostered.has(teamId));
+  if (emptyTeamIds.length > 0) {
+    throw new Error(
+      'Both women’s teams must have at least one snapshotted tournament-roster player before this match can go live'
+    );
+  }
 };
 
 interface MatchEventInput {
@@ -389,6 +449,10 @@ export const updateMatchStatus = async (matchId: string, status: MatchStatus) =>
       )
     ) {
       throw new Error(`Match status cannot transition from ${existing.status} to ${status}`);
+    }
+
+    if (existing.status === MatchStatus.SCHEDULED && status === MatchStatus.LIVE) {
+      await assertWomensMatchParticipantsHaveRoster(existing, session);
     }
 
     const transitionUpdate =

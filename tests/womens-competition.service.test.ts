@@ -365,6 +365,11 @@ describe('women competition service state machine', () => {
       replayed: false,
       data: { fixtureCount: 3, confirmedCount: 0, pendingCount: 3, workflowRevision: 4 },
     });
+    expect(mockedFenceTeamLifecycles).toHaveBeenCalledWith(
+      teamIds.map((teamId) => teamId.toString()),
+      session,
+      { registrationStatus: 'registered' }
+    );
     expect(sequential.order).toEqual([
       'matches',
       'standings',

@@ -122,6 +122,23 @@ interface WomensLeaguePlan {
   planHash: string;
 }
 
+export interface WomensLeaguePublicationInput {
+  expectedRevision: number;
+  sourceReference?: string;
+  fixtures: WomensLeagueFixtureInput[];
+  planHash: string;
+}
+
+export interface WomensLeaguePublicationResult {
+  tournamentId: string;
+  workflowRevision: number;
+  fixtureCount: 3;
+  confirmedCount: number;
+  pendingCount: number;
+  rosterPlayerCount: number;
+  planHash: string;
+}
+
 interface WomensFinalPlan {
   tournamentId: string;
   tournamentRevision: number;
@@ -750,14 +767,234 @@ export const previewWomensLeagueFixtures = (
     input.sourceReference
   );
 
+/**
+ * Session-aware publication primitive shared by the HTTP idempotency wrapper
+ * and one-off guarded importers. The caller owns the transaction and any
+ * operation receipt; all competition writes and fences remain centralized
+ * here so a CLI cannot drift from API behavior.
+ */
+export const publishWomensLeagueFixturesInSession = async (
+  tournamentId: string,
+  input: WomensLeaguePublicationInput,
+  session: ClientSession,
+  adminId?: string
+): Promise<WomensLeaguePublicationResult> => {
+  const plan = await buildWomensLeaguePlan(
+    tournamentId,
+    input.expectedRevision,
+    input.fixtures,
+    input.sourceReference,
+    session
+  );
+  if (plan.planHash !== input.planHash.toLowerCase()) {
+    throw new CompetitionError(
+      'Official fixture inputs changed after validation. Validate the plan again before publishing.',
+      409,
+      'FIXTURE_PLAN_CHANGED'
+    );
+  }
+  await fenceWomensVenueNames(
+    plan.fixtures.flatMap((fixture) => (fixture.venue ? [fixture.venue] : [])),
+    session
+  );
+  await assertNoExistingScheduleCollisions(plan.fixtures, session);
+
+  // MongoDB transaction sessions must not execute operations in parallel.
+  const resourceChecks = [
+    await Match.exists({ tournamentId }).session(session),
+    await Standings.exists({ tournamentId }).session(session),
+    await TournamentRosterEntry.exists({ tournamentId }).session(session),
+    await CompetitionDraw.exists({ tournamentId }).session(session),
+    await CompetitionBracket.exists({ tournamentId }).session(session),
+    await WomensCompetitionFinal.exists({ tournamentId }).session(session),
+    await PlayerStats.exists({ tournamentId }).session(session),
+  ];
+  if (resourceChecks.some(Boolean)) {
+    throw new CompetitionError(
+      'The first official fixture publication requires an empty women’s competition state.',
+      409,
+      'OFFICIAL_PUBLICATION_TARGET_NOT_EMPTY'
+    );
+  }
+
+  const entries = await TournamentEntry.find({
+    tournamentId,
+    status: TournamentEntryStatus.ACTIVE,
+    isDeleted: false,
+  })
+    .sort({ groupSlot: 1 })
+    .session(session)
+    .lean();
+  const teamIds = [...new Set(entries.map((entry) => entry.teamId.toString()))];
+  if (teamIds.length !== 3) {
+    throw new CompetitionError(
+      'Exactly three distinct women’s teams are required before publication.',
+      409,
+      'WOMENS_ENTRY_COUNT_INVALID'
+    );
+  }
+  const fencedTeams = await fenceTeamLifecycles(teamIds, session, {
+    registrationStatus: 'registered',
+  });
+  const invalidTeamIds = [...fencedTeams.entries()]
+    .filter(
+      ([, team]) =>
+        !team || resolveCompetitionDivision(team.division) !== CompetitionDivision.WOMEN
+    )
+    .map(([teamId]) => teamId);
+  if (invalidTeamIds.length > 0) {
+    throw new CompetitionError(
+      'Every entry must remain an available registered women’s team.',
+      409,
+      'WOMENS_ENTERED_TEAM_UNAVAILABLE',
+      { teamIds: invalidTeamIds }
+    );
+  }
+
+  const rosterPlayers = await Player.find({ teamId: { $in: teamIds }, isDeleted: false })
+    .select('+competitionRosterRevision name position jerseyNumber nationality passportPic teamId')
+    .session(session);
+  const rosterEntries = entries.map((entry) => ({
+    id: entry._id.toString(),
+    teamId: entry.teamId.toString(),
+  }));
+  const rosterViolations = findTournamentRosterLimitViolations(
+    rosterEntries,
+    rosterPlayers.map((player) => ({ teamId: player.teamId.toString() })),
+    FIXED_WOMENS_COMPETITION_RULES.maxRosterPlayers
+  );
+  if (rosterViolations.length > 0) {
+    throw new CompetitionError(
+      'One or more women’s teams exceed the maximum 10-player tournament roster.',
+      409,
+      'ROSTER_LIMIT_EXCEEDED',
+      rosterViolations
+    );
+  }
+
+  const publishedAt = new Date();
+  await Match.insertMany(
+    plan.fixtures.map((fixture) => ({
+      tournamentId,
+      homeTeam: fixture.homeTeamId,
+      awayTeam: fixture.awayTeamId,
+      date: fixture.kickoffAt ? new Date(fixture.kickoffAt) : undefined,
+      venue: fixture.venue ?? undefined,
+      scheduleStatus: fixture.scheduleStatus,
+      stage: MatchStage.LEAGUE,
+      status: MatchStatus.SCHEDULED,
+      round: fixture.officialNumber,
+      leg: 1,
+      fixtureKey: fixture.fixtureKey,
+      officialFixtureNumber: fixture.officialNumber,
+      fixtureSource: MatchFixtureSource.PHYSICAL_OFFICIAL,
+      fixturePublicationHash: plan.planHash,
+      fixtureSourceReference: plan.sourceReference ?? undefined,
+      fixturePublishedBy: adminId,
+      fixturePublishedAt: publishedAt,
+      events: [],
+    })),
+    { session, ordered: true }
+  );
+
+  const rosterCapturedAt = new Date();
+  const rosterRows = buildTournamentRosterSnapshotRows(
+    tournamentId,
+    input.expectedRevision + 1,
+    rosterEntries,
+    rosterPlayers.map((player) => ({
+      id: player._id.toString(),
+      teamId: player.teamId.toString(),
+      name: player.name,
+      position: player.position,
+      jerseyNumber: player.jerseyNumber,
+      nationality: player.nationality,
+      photo: player.passportPic,
+    })),
+    rosterCapturedAt
+  );
+  if (rosterPlayers.length > 0) {
+    const rosterFence = await Player.bulkWrite(
+      rosterPlayers.map((player) => ({
+        updateOne: {
+          filter: {
+            _id: player._id,
+            teamId: player.teamId,
+            isDeleted: false,
+            $or:
+              (player.competitionRosterRevision ?? 0) === 0
+                ? [
+                    { competitionRosterRevision: 0 },
+                    { competitionRosterRevision: { $exists: false } },
+                  ]
+                : [{ competitionRosterRevision: player.competitionRosterRevision }],
+          },
+          update: { $inc: { competitionRosterRevision: 1 } },
+        },
+      })),
+      { session }
+    );
+    if (rosterFence.modifiedCount !== rosterPlayers.length) {
+      throw new CompetitionError(
+        'A player changed while the women’s tournament roster was being captured.',
+        409,
+        'ROSTER_SNAPSHOT_CONFLICT'
+      );
+    }
+    await TournamentRosterEntry.insertMany(rosterRows, { session, ordered: true });
+  }
+  await Standings.insertMany(
+    entries.map((entry) => ({
+      tournamentId,
+      tournamentEntryId: entry._id,
+      teamId: entry.teamId,
+      played: 0,
+      won: 0,
+      drawn: 0,
+      lost: 0,
+      goalsFor: 0,
+      goalsAgainst: 0,
+      goalDifference: 0,
+      points: 0,
+      fairPlayPoints: 0,
+      revision: input.expectedRevision + 1,
+    })),
+    { session, ordered: true }
+  );
+
+  const tournament = await getWomensTournament(tournamentId, session);
+  assertExpectedRevision(tournament.workflowRevision, input.expectedRevision);
+  const updated = await updateWomensTournamentWithRevision(
+    tournamentId,
+    input.expectedRevision,
+    {
+      workflowState: CompetitionWorkflowState.GROUP_STAGE,
+      currentStage: MatchStage.LEAGUE,
+      fixturesGenerated: true,
+      leagueRounds: 3,
+      status:
+        tournament.startDate.getTime() <= publishedAt.getTime()
+          ? TournamentStatus.ONGOING
+          : TournamentStatus.UPCOMING,
+      standingsRevision: input.expectedRevision + 1,
+    },
+    session,
+    { scheduleChanged: true }
+  );
+  return {
+    tournamentId,
+    workflowRevision: updated.workflowRevision,
+    fixtureCount: 3,
+    confirmedCount: plan.confirmedCount,
+    pendingCount: plan.pendingCount,
+    rosterPlayerCount: rosterRows.length,
+    planHash: plan.planHash,
+  };
+};
+
 export const publishWomensLeagueFixtures = (
   tournamentId: string,
-  input: {
-    expectedRevision: number;
-    sourceReference?: string;
-    fixtures: WomensLeagueFixtureInput[];
-    planHash: string;
-  },
+  input: WomensLeaguePublicationInput,
   adminId?: string,
   idempotencyKey?: string
 ) =>
@@ -766,221 +1003,7 @@ export const publishWomensLeagueFixtures = (
     'publish_womens_league_fixtures',
     idempotencyKey,
     input,
-    async (session) => {
-      const plan = await buildWomensLeaguePlan(
-        tournamentId,
-        input.expectedRevision,
-        input.fixtures,
-        input.sourceReference,
-        session
-      );
-      if (plan.planHash !== input.planHash.toLowerCase()) {
-        throw new CompetitionError(
-          'Official fixture inputs changed after validation. Validate the plan again before publishing.',
-          409,
-          'FIXTURE_PLAN_CHANGED'
-        );
-      }
-      await fenceWomensVenueNames(
-        plan.fixtures.flatMap((fixture) => (fixture.venue ? [fixture.venue] : [])),
-        session
-      );
-      await assertNoExistingScheduleCollisions(plan.fixtures, session);
-
-      // MongoDB transaction sessions must not execute operations in parallel.
-      const resourceChecks = [
-        await Match.exists({ tournamentId }).session(session),
-        await Standings.exists({ tournamentId }).session(session),
-        await TournamentRosterEntry.exists({ tournamentId }).session(session),
-        await CompetitionDraw.exists({ tournamentId }).session(session),
-        await CompetitionBracket.exists({ tournamentId }).session(session),
-        await WomensCompetitionFinal.exists({ tournamentId }).session(session),
-        await PlayerStats.exists({ tournamentId }).session(session),
-      ];
-      if (resourceChecks.some(Boolean)) {
-        throw new CompetitionError(
-          'The first official fixture publication requires an empty women’s competition state.',
-          409,
-          'OFFICIAL_PUBLICATION_TARGET_NOT_EMPTY'
-        );
-      }
-
-      const entries = await TournamentEntry.find({
-        tournamentId,
-        status: TournamentEntryStatus.ACTIVE,
-        isDeleted: false,
-      })
-        .sort({ groupSlot: 1 })
-        .session(session)
-        .lean();
-      const teamIds = [...new Set(entries.map((entry) => entry.teamId.toString()))];
-      if (teamIds.length !== 3) {
-        throw new CompetitionError(
-          'Exactly three distinct women’s teams are required before publication.',
-          409,
-          'WOMENS_ENTRY_COUNT_INVALID'
-        );
-      }
-      const fencedTeams = await fenceTeamLifecycles(teamIds, session, {
-        registrationStatus: 'registered',
-      });
-      const invalidTeamIds = [...fencedTeams.entries()]
-        .filter(
-          ([, team]) =>
-            !team || resolveCompetitionDivision(team.division) !== CompetitionDivision.WOMEN
-        )
-        .map(([teamId]) => teamId);
-      if (invalidTeamIds.length > 0) {
-        throw new CompetitionError(
-          'Every entry must remain an available registered women’s team.',
-          409,
-          'WOMENS_ENTERED_TEAM_UNAVAILABLE',
-          { teamIds: invalidTeamIds }
-        );
-      }
-
-      const rosterPlayers = await Player.find({ teamId: { $in: teamIds }, isDeleted: false })
-        .select(
-          '+competitionRosterRevision name position jerseyNumber nationality passportPic teamId'
-        )
-        .session(session);
-      const rosterEntries = entries.map((entry) => ({
-        id: entry._id.toString(),
-        teamId: entry.teamId.toString(),
-      }));
-      const rosterViolations = findTournamentRosterLimitViolations(
-        rosterEntries,
-        rosterPlayers.map((player) => ({ teamId: player.teamId.toString() })),
-        FIXED_WOMENS_COMPETITION_RULES.maxRosterPlayers
-      );
-      if (rosterViolations.length > 0) {
-        throw new CompetitionError(
-          'One or more women’s teams exceed the maximum 10-player tournament roster.',
-          409,
-          'ROSTER_LIMIT_EXCEEDED',
-          rosterViolations
-        );
-      }
-
-      const publishedAt = new Date();
-      await Match.insertMany(
-        plan.fixtures.map((fixture) => ({
-          tournamentId,
-          homeTeam: fixture.homeTeamId,
-          awayTeam: fixture.awayTeamId,
-          date: fixture.kickoffAt ? new Date(fixture.kickoffAt) : undefined,
-          venue: fixture.venue ?? undefined,
-          scheduleStatus: fixture.scheduleStatus,
-          stage: MatchStage.LEAGUE,
-          status: MatchStatus.SCHEDULED,
-          round: fixture.officialNumber,
-          leg: 1,
-          fixtureKey: fixture.fixtureKey,
-          officialFixtureNumber: fixture.officialNumber,
-          fixtureSource: MatchFixtureSource.PHYSICAL_OFFICIAL,
-          fixturePublicationHash: plan.planHash,
-          fixtureSourceReference: plan.sourceReference ?? undefined,
-          fixturePublishedBy: adminId,
-          fixturePublishedAt: publishedAt,
-          events: [],
-        })),
-        { session, ordered: true }
-      );
-
-      const rosterCapturedAt = new Date();
-      const rosterRows = buildTournamentRosterSnapshotRows(
-        tournamentId,
-        input.expectedRevision + 1,
-        rosterEntries,
-        rosterPlayers.map((player) => ({
-          id: player._id.toString(),
-          teamId: player.teamId.toString(),
-          name: player.name,
-          position: player.position,
-          jerseyNumber: player.jerseyNumber,
-          nationality: player.nationality,
-          photo: player.passportPic,
-        })),
-        rosterCapturedAt
-      );
-      if (rosterPlayers.length > 0) {
-        const rosterFence = await Player.bulkWrite(
-          rosterPlayers.map((player) => ({
-            updateOne: {
-              filter: {
-                _id: player._id,
-                teamId: player.teamId,
-                isDeleted: false,
-                $or:
-                  (player.competitionRosterRevision ?? 0) === 0
-                    ? [
-                        { competitionRosterRevision: 0 },
-                        { competitionRosterRevision: { $exists: false } },
-                      ]
-                    : [{ competitionRosterRevision: player.competitionRosterRevision }],
-              },
-              update: { $inc: { competitionRosterRevision: 1 } },
-            },
-          })),
-          { session }
-        );
-        if (rosterFence.modifiedCount !== rosterPlayers.length) {
-          throw new CompetitionError(
-            'A player changed while the women’s tournament roster was being captured.',
-            409,
-            'ROSTER_SNAPSHOT_CONFLICT'
-          );
-        }
-        await TournamentRosterEntry.insertMany(rosterRows, { session, ordered: true });
-      }
-      await Standings.insertMany(
-        entries.map((entry) => ({
-          tournamentId,
-          tournamentEntryId: entry._id,
-          teamId: entry.teamId,
-          played: 0,
-          won: 0,
-          drawn: 0,
-          lost: 0,
-          goalsFor: 0,
-          goalsAgainst: 0,
-          goalDifference: 0,
-          points: 0,
-          fairPlayPoints: 0,
-          revision: input.expectedRevision + 1,
-        })),
-        { session, ordered: true }
-      );
-
-      const tournament = await getWomensTournament(tournamentId, session);
-      assertExpectedRevision(tournament.workflowRevision, input.expectedRevision);
-      const updated = await updateWomensTournamentWithRevision(
-        tournamentId,
-        input.expectedRevision,
-        {
-          workflowState: CompetitionWorkflowState.GROUP_STAGE,
-          currentStage: MatchStage.LEAGUE,
-          fixturesGenerated: true,
-          leagueRounds: 3,
-          status:
-            tournament.startDate.getTime() <= publishedAt.getTime()
-              ? TournamentStatus.ONGOING
-              : TournamentStatus.UPCOMING,
-          standingsRevision: input.expectedRevision + 1,
-        },
-        session,
-        { scheduleChanged: true }
-      );
-      return {
-        tournamentId,
-        workflowRevision: updated.workflowRevision,
-        fixtureCount: 3,
-        confirmedCount: plan.confirmedCount,
-        pendingCount: plan.pendingCount,
-        rosterPlayerCount: rosterRows.length,
-        planHash: plan.planHash,
-      };
-    }
+    (session) => publishWomensLeagueFixturesInSession(tournamentId, input, session, adminId)
   );
 
 export const getPublishedWomensLeaguePlan = async (tournamentId: string) => {

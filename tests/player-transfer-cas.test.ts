@@ -20,7 +20,7 @@ jest.mock('@/models/team.model', () => ({
 }));
 
 jest.mock('@/services/player-eligibility.service', () => ({
-  getOpenPublishedCompetitionsForTeam: jest.fn().mockResolvedValue([]),
+  getOpenPublishedCompetitionsExcludingPlayer: jest.fn().mockResolvedValue([]),
   getOpenRosterLocksForPlayer: jest.fn().mockResolvedValue([]),
 }));
 
@@ -50,7 +50,7 @@ import Player from '@/models/player.model';
 import Team from '@/models/team.model';
 import { updatePlayer } from '@/controllers/player.controller';
 import { transferPlayerToAvailableRosterSlot } from '@/services/player-roster.service';
-import { getOpenPublishedCompetitionsForTeam } from '@/services/player-eligibility.service';
+import { getOpenPublishedCompetitionsExcludingPlayer } from '@/services/player-eligibility.service';
 import { updatePlayerMetadataAndOpenRosterSnapshots } from '@/services/player-roster-identity.service';
 
 const SOURCE_TEAM_ID = '507f1f77bcf86cd799439011';
@@ -66,8 +66,8 @@ const mockedTransferPlayer = transferPlayerToAvailableRosterSlot as jest.MockedF
   typeof transferPlayerToAvailableRosterSlot
 >;
 const mockedGetOpenPublishedCompetitions =
-  getOpenPublishedCompetitionsForTeam as jest.MockedFunction<
-    typeof getOpenPublishedCompetitionsForTeam
+  getOpenPublishedCompetitionsExcludingPlayer as jest.MockedFunction<
+    typeof getOpenPublishedCompetitionsExcludingPlayer
   >;
 const mockedMetadataUpdate =
   updatePlayerMetadataAndOpenRosterSnapshots as jest.MockedFunction<
@@ -194,6 +194,41 @@ describe('player roster compare-and-set protection', () => {
       expect.objectContaining({
         success: true,
         competitionEligibilityUnavailable: true,
+      })
+    );
+  });
+
+  it('reports an enrolled destination transfer as eligible from the committed snapshot', async () => {
+    mockedTransferPlayer.mockResolvedValue({
+      rosterIsFull: false,
+      player: {
+        _id: { toString: () => PLAYER_ID },
+        teamId: { toString: () => DESTINATION_TEAM_ID },
+      } as never,
+    });
+    mockedGetOpenPublishedCompetitions.mockResolvedValueOnce([]);
+    const response = buildResponse();
+
+    await updatePlayer(
+      {
+        body: { teamId: DESTINATION_TEAM_ID },
+        params: { id: PLAYER_ID },
+      } as unknown as Request,
+      response
+    );
+
+    expect(mockedGetOpenPublishedCompetitions).toHaveBeenCalledWith(
+      DESTINATION_TEAM_ID,
+      PLAYER_ID
+    );
+    expect(response.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: true,
+        competitionEligibility: {
+          eligibleForOpenPublishedCompetitions: true,
+          reason: null,
+          excludedTournaments: [],
+        },
       })
     );
   });
