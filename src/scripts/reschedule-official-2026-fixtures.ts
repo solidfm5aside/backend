@@ -323,8 +323,8 @@ const applyReschedule = async (
 
   const venueNames = [
     ...new Set(
-      OFFICIAL_2026_FIXTURES.map((fixture) => fixture.venueName).filter(
-        (venue): venue is string => Boolean(venue),
+      OFFICIAL_2026_FIXTURES.flatMap((fixture) =>
+        fixture.venueName ? [fixture.venueName] : [],
       ),
     ),
   ];
