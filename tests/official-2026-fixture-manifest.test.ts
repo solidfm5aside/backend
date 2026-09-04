@@ -92,7 +92,7 @@ describe("official 2026 physical fixture manifest", () => {
     expect(resolveOfficial2026TeamDefinition("Udi Siding Youths")?.key).toBe(
       "udi-siding-youths-fc",
     );
-    expect(resolveOfficial2026TeamDefinition("NYSC")?.key).toBe("nysc-fc");
+    expect(resolveOfficial2026TeamDefinition("Success")?.key).toBe("success-fc");
     expect(
       resolveOfficial2026TeamDefinition("Not An Official Team"),
     ).toBeNull();
@@ -145,7 +145,11 @@ describe("official 2026 physical fixture manifest", () => {
     ).toBe(true);
     expect(confirmed).toHaveLength(42);
     expect(
-      confirmed.every((fixture) => fixture.kickoffAt && fixture.venueName),
+      OFFICIAL_2026_FIXTURES.slice(1).every(
+        (fixture) =>
+          fixture.venueName === "Tribu Arena" ||
+          fixture.venueName === "Wembley Hotel",
+      ),
     ).toBe(true);
     expect(
       OFFICIAL_2026_FIXTURES.map((fixture) => fixture.officialNumber),
@@ -164,15 +168,15 @@ describe("official 2026 physical fixture manifest", () => {
     expect(confirmed[1]).toEqual(
       expect.objectContaining({
         officialNumber: 2,
-        kickoffAt: "2026-08-29T13:00:00.000Z",
-        venueName: "Eclipse Arena",
+        kickoffAt: "2026-09-13T14:00:00.000Z",
+        venueName: "Wembley Hotel",
       }),
     );
     expect(confirmed.at(-1)).toEqual(
       expect.objectContaining({
         officialNumber: 42,
         kickoffAt: "2026-09-20T15:00:00.000Z",
-        venueName: "Tribu Arena",
+        venueName: "Wembley Hotel",
       }),
     );
   });
@@ -205,12 +209,12 @@ describe("official 2026 physical fixture manifest", () => {
       }),
     );
     expect(OFFICIAL_2026_FIXTURE_PUBLICATION_HASH).toBe(
-      "bd30f96f5a5746f5df6ebb03cc8a3f9393bbc7e4712cfc535703bf2257890583",
+      "11f5eec3538ac33a48a2866d167507527d0e290bb6f84581515175df9ac6d569",
     );
     expect(OFFICIAL_2026_SOURCE_SHA256).toBe(
-      "50f202333794db274eea0223ac83c26aca0676ec3ccd2fd4b9ceabfe7039b117",
+      "0d9061edc5ab1a23ae16a7627354203c3563e398f9f5c0fe41c9a980e3f9be22",
     );
-    expect(OFFICIAL_2026_SOURCE_BYTE_LENGTH).toBe(65_713);
+    expect(OFFICIAL_2026_SOURCE_BYTE_LENGTH).toBe(37_952);
     expect(OFFICIAL_2026_OPENER_SUPPLEMENT).toEqual({
       sourceTitle: "WhatsApp Image 2026-08-22 at 7.10.30 PM.jpeg",
       sourceSha256:
@@ -229,7 +233,7 @@ describe("official 2026 physical fixture manifest", () => {
       `opener-image-sha256:${OFFICIAL_2026_OPENER_SUPPLEMENT.sourceSha256}`,
     );
     expect(OFFICIAL_2026_FIXTURE_SOURCE_REFERENCE).toContain(
-      "schedule-owner-confirmed:2026-08-22",
+      "master-reschedule:2026-09-04",
     );
     expect(OFFICIAL_2026_FIXTURE_SOURCE_REFERENCE.length).toBeLessThanOrEqual(
       200,
@@ -240,7 +244,7 @@ describe("official 2026 physical fixture manifest", () => {
         .update(JSON.stringify(OFFICIAL_2026_FIXTURES.slice(1)))
         .digest("hex"),
     ).toBe(
-      "0de0737e84b5a2d08f1456e5abc85e7aa23d727e7768274528926ff478f1fbed",
+      "5072c2773aa9e6527330685fafb6206fa58a8cf693efd4a9012f7b5c496a1652",
     );
   });
 });

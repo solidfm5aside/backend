@@ -221,6 +221,40 @@ groups, dates, venues, schedule states, and provenance fields is compared with
 the pinned manifest before success is reported. The command never prints the
 MongoDB URI or application secrets.
 
+## Guarded official 2026 master-sheet reschedule
+
+After the original physical publication, remaining men's group fixtures can be
+rewritten from the verified master sheet without touching the completed opener
+or the women's tournament:
+
+```bash
+npm run db:official-2026:reschedule:plan -- --tournament-id=6a88bfa4ce2cf64818770691
+```
+
+The plan keeps official fixture numbers on the original pairings, moves the
+remaining 41 kickoffs onto `Tribu Arena` and `Wembley Hotel` only, preserves
+Samba Boys 8-1 NYSC, and refuses if any remaining men's fixture is live,
+completed, scored, or event-bearing. Eclipse Arena remains a venue identity
+but is unused on remaining fixtures.
+
+After independently verifying the plan and a restorable backup:
+
+```bash
+OFFICIAL_2026_RESCHEDULE_ALLOW_EXECUTE=true \
+OFFICIAL_2026_RESCHEDULE_ALLOW_PRODUCTION=true npm run db:official-2026:reschedule -- \
+  --tournament-id=6a88bfa4ce2cf64818770691 \
+  --confirm-tournament-id=6a88bfa4ce2cf64818770691 \
+  --confirm-tournament-name="<exact-current-tournament-name>" \
+  --confirm-db=<exact-connected-database-name> \
+  --backup-reference=<verified-restorable-backup-id> \
+  --backup-sha256=<independently-computed-backup-artifact-sha256> \
+  --confirm=APPLY-OFFICIAL-2026-MASTER-RESCHEDULE
+```
+
+The remaining men's updates, opener publication-hash refresh, schedule
+revision increment, and audit marker are committed in one MongoDB transaction.
+Women's matches are fingerprinted before and after and must be unchanged.
+
 ## Guarded official women-tournament conversion
 
 `Team.division` and `Tournament.division` are explicit (`men` or `women`). A

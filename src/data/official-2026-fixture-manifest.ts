@@ -3,14 +3,32 @@ import { createHash } from "node:crypto";
 export const OFFICIAL_2026_SOURCE_TITLE =
   "COJUDE SOLID FM 5-ASIDE FOOTBALL TOURNAMENT" as const;
 export const OFFICIAL_2026_SOURCE_SHA256 =
-  "50f202333794db274eea0223ac83c26aca0676ec3ccd2fd4b9ceabfe7039b117" as const;
-export const OFFICIAL_2026_SOURCE_BYTE_LENGTH = 65_713 as const;
+  "0d9061edc5ab1a23ae16a7627354203c3563e398f9f5c0fe41c9a980e3f9be22" as const;
+export const OFFICIAL_2026_SOURCE_BYTE_LENGTH = 37_952 as const;
 export const OFFICIAL_2026_TIME_ZONE = "Africa/Lagos" as const;
 
 /**
- * Fixture 1 was listed without a schedule in the DOCX. The supplied match
- * artwork independently identifies Samba Boys vs NYSC at 3:00 PM; the
- * competition owner explicitly confirmed 2026-08-23 and Tribu Arena.
+ * Remaining group fixtures 2-42 come from the verified master sheet
+ * (Tribu Arena and Wembley Hotel only). Official numbers stay on the
+ * original pairing identities; only kickoff, venue, and one home/away
+ * orientation change.
+ */
+export const OFFICIAL_2026_MASTER_RESCHEDULE = {
+  sourceTitle: "THE_COJUDE_SOLID_5-ASIDE_MASTER_FIXTURES_FORMATTED_LIKE_SECOND.docx",
+  remainingFixtureCount: 41,
+  venues: ["Tribu Arena", "Wembley Hotel"],
+  firstRemainingLocalDate: "2026-09-05",
+  lastRemainingLocalDate: "2026-09-26",
+  authority: "competition-owner-verified-master-2026-09-04",
+  preservesOfficialNumbers: true,
+  frozenOpenerOfficialNumber: 1,
+} as const;
+
+/**
+ * Fixture 1 was listed without a schedule in the original DOCX. The supplied
+ * match artwork independently identifies Samba Boys vs NYSC at 3:00 PM; the
+ * competition owner explicitly confirmed 2026-08-23 and Tribu Arena. That
+ * completed opener is frozen and is not present on the later master sheet.
  */
 export const OFFICIAL_2026_OPENER_SUPPLEMENT = {
   sourceTitle: "WhatsApp Image 2026-08-22 at 7.10.30 PM.jpeg",
@@ -25,7 +43,7 @@ export const OFFICIAL_2026_OPENER_SUPPLEMENT = {
 } as const;
 
 export const OFFICIAL_2026_FIXTURE_SOURCE_REFERENCE =
-  `docx-sha256:${OFFICIAL_2026_SOURCE_SHA256};opener-image-sha256:${OFFICIAL_2026_OPENER_SUPPLEMENT.sourceSha256};schedule-owner-confirmed:2026-08-22` as const;
+  `docx-sha256:${OFFICIAL_2026_SOURCE_SHA256};opener-image-sha256:${OFFICIAL_2026_OPENER_SUPPLEMENT.sourceSha256};master-reschedule:2026-09-04` as const;
 
 export type Official2026GroupKey = "A" | "B";
 export type Official2026SourcePot = "Pot 1" | "Pot 2";
@@ -65,7 +83,7 @@ export const OFFICIAL_2026_TEAMS = [
   {
     key: "success-fc",
     databaseName: "SUCCESS FC",
-    acceptedDatabaseNames: ["SUCCESS FC", "Success Fc"],
+    acceptedDatabaseNames: ["SUCCESS FC", "Success Fc", "Success"],
     groupKey: "A",
     sourcePot: "Pot 1",
     groupSlot: 3,
@@ -186,7 +204,7 @@ export const OFFICIAL_2026_VENUES = [
     databaseName: "TRIBU HOTEL ARENA",
     documentName: "Tribu Arena",
     acceptedDatabaseNames: ["TRIBU HOTEL ARENA", "Tribu Arena"],
-    localKickoffHours: [15, 16],
+    localKickoffHours: [14, 15, 16],
   },
 ] as const;
 
@@ -209,9 +227,10 @@ export interface Official2026Fixture {
 
 /**
  * Kickoffs are exact instants converted from local Nigeria times. Africa/Lagos
- * is UTC+01:00 throughout these 2026 dates. Fixture 1's schedule is the
- * separately confirmed supplement described above; fixtures 2-42 retain the
- * exact DOCX table order and schedule.
+ * is UTC+01:00 throughout these 2026 dates. Fixture 1 remains the completed
+ * opener. Fixtures 2-42 keep their original official numbers and pairings,
+ * with kickoffs and venues taken from the verified master sheet. Official
+ * fixture 41 is the only home/away orientation change (Lala Brothers vs Success).
  */
 export const OFFICIAL_2026_FIXTURES = [
   {
@@ -234,8 +253,8 @@ export const OFFICIAL_2026_FIXTURES = [
     awayTeamKey: "smooth-citizens",
     sourceHomeName: "Lala Brothers",
     sourceAwayName: "Smooth Citizens",
-    kickoffAt: "2026-08-29T13:00:00.000Z",
-    venueName: "Eclipse Arena",
+    kickoffAt: "2026-09-13T14:00:00.000Z",
+    venueName: "Wembley Hotel",
     scheduleStatus: "confirmed",
   },
   {
@@ -244,10 +263,10 @@ export const OFFICIAL_2026_FIXTURES = [
     sourcePot: "Pot 1",
     homeTeamKey: "success-fc",
     awayTeamKey: "golden-boys-of-kibang",
-    sourceHomeName: "Success Fc",
+    sourceHomeName: "Success",
     sourceAwayName: "Golden Boys of Kibang",
-    kickoffAt: "2026-08-29T14:00:00.000Z",
-    venueName: "Eclipse Arena",
+    kickoffAt: "2026-09-13T13:00:00.000Z",
+    venueName: "Wembley Hotel",
     scheduleStatus: "confirmed",
   },
   {
@@ -258,7 +277,7 @@ export const OFFICIAL_2026_FIXTURES = [
     awayTeamKey: "mrphil-photos",
     sourceHomeName: "Rock FC",
     sourceAwayName: "MrPhil Photos",
-    kickoffAt: "2026-08-29T15:00:00.000Z",
+    kickoffAt: "2026-09-19T15:00:00.000Z",
     venueName: "Tribu Arena",
     scheduleStatus: "confirmed",
   },
@@ -269,8 +288,8 @@ export const OFFICIAL_2026_FIXTURES = [
     homeTeamKey: "padre-fc",
     awayTeamKey: "udi-siding-youths-fc",
     sourceHomeName: "Padre FC",
-    sourceAwayName: "Udi Siding Youths Fc",
-    kickoffAt: "2026-08-29T15:00:00.000Z",
+    sourceAwayName: "Udi Siding Youths",
+    kickoffAt: "2026-09-19T14:00:00.000Z",
     venueName: "Wembley Hotel",
     scheduleStatus: "confirmed",
   },
@@ -282,8 +301,8 @@ export const OFFICIAL_2026_FIXTURES = [
     awayTeamKey: "ace-fc",
     sourceHomeName: "MrPhil Photos",
     sourceAwayName: "Ace FC",
-    kickoffAt: "2026-08-30T13:00:00.000Z",
-    venueName: "Eclipse Arena",
+    kickoffAt: "2026-09-20T15:00:00.000Z",
+    venueName: "Tribu Arena",
     scheduleStatus: "confirmed",
   },
   {
@@ -294,8 +313,8 @@ export const OFFICIAL_2026_FIXTURES = [
     awayTeamKey: "tawm-fc",
     sourceHomeName: "Udi Siding Youths",
     sourceAwayName: "Tawm FC",
-    kickoffAt: "2026-08-30T14:00:00.000Z",
-    venueName: "Eclipse Arena",
+    kickoffAt: "2026-09-20T13:00:00.000Z",
+    venueName: "Tribu Arena",
     scheduleStatus: "confirmed",
   },
   {
@@ -305,9 +324,9 @@ export const OFFICIAL_2026_FIXTURES = [
     homeTeamKey: "samba-boys",
     awayTeamKey: "tribu-hotel-fc",
     sourceHomeName: "Samba Boys",
-    sourceAwayName: "Tribu Hotel Fc",
-    kickoffAt: "2026-08-30T14:00:00.000Z",
-    venueName: "Wembley Hotel",
+    sourceAwayName: "Tribu Hotel",
+    kickoffAt: "2026-09-19T14:00:00.000Z",
+    venueName: "Tribu Arena",
     scheduleStatus: "confirmed",
   },
   {
@@ -317,8 +336,8 @@ export const OFFICIAL_2026_FIXTURES = [
     homeTeamKey: "lala-brothers",
     awayTeamKey: "nysc-fc",
     sourceHomeName: "Lala Brothers",
-    sourceAwayName: "NYSC Fc",
-    kickoffAt: "2026-08-30T15:00:00.000Z",
+    sourceAwayName: "NYSC",
+    kickoffAt: "2026-09-05T14:00:00.000Z",
     venueName: "Tribu Arena",
     scheduleStatus: "confirmed",
   },
@@ -330,8 +349,8 @@ export const OFFICIAL_2026_FIXTURES = [
     awayTeamKey: "big-time-fc",
     sourceHomeName: "Rock FC",
     sourceAwayName: "Big Time FC",
-    kickoffAt: "2026-08-30T15:00:00.000Z",
-    venueName: "Wembley Hotel",
+    kickoffAt: "2026-09-06T13:00:00.000Z",
+    venueName: "Tribu Arena",
     scheduleStatus: "confirmed",
   },
   {
@@ -342,8 +361,8 @@ export const OFFICIAL_2026_FIXTURES = [
     awayTeamKey: "tawm-fc",
     sourceHomeName: "Padre FC",
     sourceAwayName: "Tawm FC",
-    kickoffAt: "2026-09-05T13:00:00.000Z",
-    venueName: "Eclipse Arena",
+    kickoffAt: "2026-09-13T15:00:00.000Z",
+    venueName: "Wembley Hotel",
     scheduleStatus: "confirmed",
   },
   {
@@ -354,8 +373,8 @@ export const OFFICIAL_2026_FIXTURES = [
     awayTeamKey: "lala-brothers",
     sourceHomeName: "Golden Boys of Kibang",
     sourceAwayName: "Lala Brothers",
-    kickoffAt: "2026-09-05T13:00:00.000Z",
-    venueName: "Wembley Hotel",
+    kickoffAt: "2026-09-19T13:00:00.000Z",
+    venueName: "Tribu Arena",
     scheduleStatus: "confirmed",
   },
   {
@@ -364,10 +383,10 @@ export const OFFICIAL_2026_FIXTURES = [
     sourcePot: "Pot 1",
     homeTeamKey: "nysc-fc",
     awayTeamKey: "smooth-citizens",
-    sourceHomeName: "NYSC Fc",
+    sourceHomeName: "NYSC",
     sourceAwayName: "Smooth Citizens",
-    kickoffAt: "2026-09-05T14:00:00.000Z",
-    venueName: "Eclipse Arena",
+    kickoffAt: "2026-09-12T13:00:00.000Z",
+    venueName: "Tribu Arena",
     scheduleStatus: "confirmed",
   },
   {
@@ -379,7 +398,7 @@ export const OFFICIAL_2026_FIXTURES = [
     sourceHomeName: "MrPhil Photos",
     sourceAwayName: "Udi Siding Youths",
     kickoffAt: "2026-09-05T14:00:00.000Z",
-    venueName: "Tribu Arena",
+    venueName: "Wembley Hotel",
     scheduleStatus: "confirmed",
   },
   {
@@ -388,9 +407,9 @@ export const OFFICIAL_2026_FIXTURES = [
     sourcePot: "Pot 1",
     homeTeamKey: "tribu-hotel-fc",
     awayTeamKey: "success-fc",
-    sourceHomeName: "Tribu Hotel Fc",
-    sourceAwayName: "Success Fc",
-    kickoffAt: "2026-09-05T15:00:00.000Z",
+    sourceHomeName: "Tribu Hotel",
+    sourceAwayName: "Success",
+    kickoffAt: "2026-09-05T13:00:00.000Z",
     venueName: "Tribu Arena",
     scheduleStatus: "confirmed",
   },
@@ -402,8 +421,8 @@ export const OFFICIAL_2026_FIXTURES = [
     awayTeamKey: "ace-fc",
     sourceHomeName: "Big Time FC",
     sourceAwayName: "Ace FC",
-    kickoffAt: "2026-09-06T13:00:00.000Z",
-    venueName: "Eclipse Arena",
+    kickoffAt: "2026-09-13T15:00:00.000Z",
+    venueName: "Tribu Arena",
     scheduleStatus: "confirmed",
   },
   {
@@ -414,7 +433,7 @@ export const OFFICIAL_2026_FIXTURES = [
     awayTeamKey: "lala-brothers",
     sourceHomeName: "Samba Boys",
     sourceAwayName: "Lala Brothers",
-    kickoffAt: "2026-09-06T13:00:00.000Z",
+    kickoffAt: "2026-09-12T13:00:00.000Z",
     venueName: "Wembley Hotel",
     scheduleStatus: "confirmed",
   },
@@ -426,8 +445,8 @@ export const OFFICIAL_2026_FIXTURES = [
     awayTeamKey: "mrphil-photos",
     sourceHomeName: "Tawm FC",
     sourceAwayName: "MrPhil Photos",
-    kickoffAt: "2026-09-06T14:00:00.000Z",
-    venueName: "Eclipse Arena",
+    kickoffAt: "2026-09-26T15:00:00.000Z",
+    venueName: "Tribu Arena",
     scheduleStatus: "confirmed",
   },
   {
@@ -437,9 +456,9 @@ export const OFFICIAL_2026_FIXTURES = [
     homeTeamKey: "smooth-citizens",
     awayTeamKey: "success-fc",
     sourceHomeName: "Smooth Citizens",
-    sourceAwayName: "Success Fc",
-    kickoffAt: "2026-09-06T14:00:00.000Z",
-    venueName: "Tribu Arena",
+    sourceAwayName: "Success",
+    kickoffAt: "2026-09-19T13:00:00.000Z",
+    venueName: "Wembley Hotel",
     scheduleStatus: "confirmed",
   },
   {
@@ -450,8 +469,8 @@ export const OFFICIAL_2026_FIXTURES = [
     awayTeamKey: "rock-fc",
     sourceHomeName: "Padre FC",
     sourceAwayName: "Rock FC",
-    kickoffAt: "2026-09-06T14:00:00.000Z",
-    venueName: "Wembley Hotel",
+    kickoffAt: "2026-09-12T15:00:00.000Z",
+    venueName: "Tribu Arena",
     scheduleStatus: "confirmed",
   },
   {
@@ -460,9 +479,9 @@ export const OFFICIAL_2026_FIXTURES = [
     sourcePot: "Pot 1",
     homeTeamKey: "nysc-fc",
     awayTeamKey: "golden-boys-of-kibang",
-    sourceHomeName: "NYSC Fc",
+    sourceHomeName: "NYSC",
     sourceAwayName: "Golden Boys of Kibang",
-    kickoffAt: "2026-09-06T15:00:00.000Z",
+    kickoffAt: "2026-09-20T13:00:00.000Z",
     venueName: "Wembley Hotel",
     scheduleStatus: "confirmed",
   },
@@ -474,8 +493,8 @@ export const OFFICIAL_2026_FIXTURES = [
     awayTeamKey: "ace-fc",
     sourceHomeName: "Padre FC",
     sourceAwayName: "Ace FC",
-    kickoffAt: "2026-09-12T13:00:00.000Z",
-    venueName: "Eclipse Arena",
+    kickoffAt: "2026-09-05T15:00:00.000Z",
+    venueName: "Tribu Arena",
     scheduleStatus: "confirmed",
   },
   {
@@ -486,7 +505,7 @@ export const OFFICIAL_2026_FIXTURES = [
     awayTeamKey: "rock-fc",
     sourceHomeName: "Tawm FC",
     sourceAwayName: "Rock FC",
-    kickoffAt: "2026-09-12T13:00:00.000Z",
+    kickoffAt: "2026-09-05T15:00:00.000Z",
     venueName: "Wembley Hotel",
     scheduleStatus: "confirmed",
   },
@@ -496,10 +515,10 @@ export const OFFICIAL_2026_FIXTURES = [
     sourcePot: "Pot 1",
     homeTeamKey: "tribu-hotel-fc",
     awayTeamKey: "nysc-fc",
-    sourceHomeName: "Tribu Hotel Fc",
-    sourceAwayName: "NYSC Fc",
-    kickoffAt: "2026-09-12T14:00:00.000Z",
-    venueName: "Eclipse Arena",
+    sourceHomeName: "Tribu Hotel",
+    sourceAwayName: "NYSC",
+    kickoffAt: "2026-09-13T13:00:00.000Z",
+    venueName: "Tribu Arena",
     scheduleStatus: "confirmed",
   },
   {
@@ -511,7 +530,7 @@ export const OFFICIAL_2026_FIXTURES = [
     sourceHomeName: "MrPhil Photos",
     sourceAwayName: "Big Time FC",
     kickoffAt: "2026-09-12T14:00:00.000Z",
-    venueName: "Tribu Arena",
+    venueName: "Wembley Hotel",
     scheduleStatus: "confirmed",
   },
   {
@@ -522,7 +541,7 @@ export const OFFICIAL_2026_FIXTURES = [
     awayTeamKey: "smooth-citizens",
     sourceHomeName: "Samba Boys",
     sourceAwayName: "Smooth Citizens",
-    kickoffAt: "2026-09-12T15:00:00.000Z",
+    kickoffAt: "2026-09-05T13:00:00.000Z",
     venueName: "Wembley Hotel",
     scheduleStatus: "confirmed",
   },
@@ -532,10 +551,10 @@ export const OFFICIAL_2026_FIXTURES = [
     sourcePot: "Pot 2",
     homeTeamKey: "udi-siding-youths-fc",
     awayTeamKey: "rock-fc",
-    sourceHomeName: "Udi Siding Youths Fc",
+    sourceHomeName: "Udi Siding Youths",
     sourceAwayName: "Rock FC",
-    kickoffAt: "2026-09-13T13:00:00.000Z",
-    venueName: "Eclipse Arena",
+    kickoffAt: "2026-09-13T14:00:00.000Z",
+    venueName: "Tribu Arena",
     scheduleStatus: "confirmed",
   },
   {
@@ -544,10 +563,10 @@ export const OFFICIAL_2026_FIXTURES = [
     sourcePot: "Pot 1",
     homeTeamKey: "nysc-fc",
     awayTeamKey: "success-fc",
-    sourceHomeName: "NYSC Fc",
-    sourceAwayName: "Success Fc",
-    kickoffAt: "2026-09-13T14:00:00.000Z",
-    venueName: "Eclipse Arena",
+    sourceHomeName: "NYSC",
+    sourceAwayName: "Success",
+    kickoffAt: "2026-09-26T13:00:00.000Z",
+    venueName: "Tribu Arena",
     scheduleStatus: "confirmed",
   },
   {
@@ -558,8 +577,8 @@ export const OFFICIAL_2026_FIXTURES = [
     awayTeamKey: "big-time-fc",
     sourceHomeName: "Padre FC",
     sourceAwayName: "Big Time FC",
-    kickoffAt: "2026-09-13T14:00:00.000Z",
-    venueName: "Wembley Hotel",
+    kickoffAt: "2026-09-20T14:00:00.000Z",
+    venueName: "Tribu Arena",
     scheduleStatus: "confirmed",
   },
   {
@@ -570,7 +589,7 @@ export const OFFICIAL_2026_FIXTURES = [
     awayTeamKey: "tribu-hotel-fc",
     sourceHomeName: "Golden Boys of Kibang",
     sourceAwayName: "Tribu Hotel",
-    kickoffAt: "2026-09-13T15:00:00.000Z",
+    kickoffAt: "2026-09-12T14:00:00.000Z",
     venueName: "Tribu Arena",
     scheduleStatus: "confirmed",
   },
@@ -582,8 +601,8 @@ export const OFFICIAL_2026_FIXTURES = [
     awayTeamKey: "tawm-fc",
     sourceHomeName: "Ace FC",
     sourceAwayName: "Tawm FC",
-    kickoffAt: "2026-09-13T15:00:00.000Z",
-    venueName: "Wembley Hotel",
+    kickoffAt: "2026-09-06T14:00:00.000Z",
+    venueName: "Tribu Arena",
     scheduleStatus: "confirmed",
   },
   {
@@ -594,8 +613,8 @@ export const OFFICIAL_2026_FIXTURES = [
     awayTeamKey: "golden-boys-of-kibang",
     sourceHomeName: "Smooth Citizens",
     sourceAwayName: "Golden Boys of Kibang",
-    kickoffAt: "2026-09-19T13:00:00.000Z",
-    venueName: "Eclipse Arena",
+    kickoffAt: "2026-09-26T14:00:00.000Z",
+    venueName: "Tribu Arena",
     scheduleStatus: "confirmed",
   },
   {
@@ -606,8 +625,8 @@ export const OFFICIAL_2026_FIXTURES = [
     awayTeamKey: "udi-siding-youths-fc",
     sourceHomeName: "Ace FC",
     sourceAwayName: "Udi Siding Youths",
-    kickoffAt: "2026-09-19T14:00:00.000Z",
-    venueName: "Eclipse Arena",
+    kickoffAt: "2026-09-12T15:00:00.000Z",
+    venueName: "Wembley Hotel",
     scheduleStatus: "confirmed",
   },
   {
@@ -617,9 +636,9 @@ export const OFFICIAL_2026_FIXTURES = [
     homeTeamKey: "samba-boys",
     awayTeamKey: "success-fc",
     sourceHomeName: "Samba Boys",
-    sourceAwayName: "Success Fc",
-    kickoffAt: "2026-09-19T14:00:00.000Z",
-    venueName: "Tribu Arena",
+    sourceAwayName: "Success",
+    kickoffAt: "2026-09-20T14:00:00.000Z",
+    venueName: "Wembley Hotel",
     scheduleStatus: "confirmed",
   },
   {
@@ -630,7 +649,7 @@ export const OFFICIAL_2026_FIXTURES = [
     awayTeamKey: "big-time-fc",
     sourceHomeName: "Tawm FC",
     sourceAwayName: "Big Time FC",
-    kickoffAt: "2026-09-19T14:00:00.000Z",
+    kickoffAt: "2026-09-19T15:00:00.000Z",
     venueName: "Wembley Hotel",
     scheduleStatus: "confirmed",
   },
@@ -641,9 +660,9 @@ export const OFFICIAL_2026_FIXTURES = [
     homeTeamKey: "lala-brothers",
     awayTeamKey: "tribu-hotel-fc",
     sourceHomeName: "Lala Brothers",
-    sourceAwayName: "Tribu Hotel Fc",
-    kickoffAt: "2026-09-19T15:00:00.000Z",
-    venueName: "Tribu Arena",
+    sourceAwayName: "Tribu Hotel",
+    kickoffAt: "2026-09-26T13:00:00.000Z",
+    venueName: "Wembley Hotel",
     scheduleStatus: "confirmed",
   },
   {
@@ -653,9 +672,9 @@ export const OFFICIAL_2026_FIXTURES = [
     homeTeamKey: "big-time-fc",
     awayTeamKey: "udi-siding-youths-fc",
     sourceHomeName: "Big Time FC",
-    sourceAwayName: "Udi Siding Youths Fc",
-    kickoffAt: "2026-09-20T13:00:00.000Z",
-    venueName: "Eclipse Arena",
+    sourceAwayName: "Udi Siding Youths",
+    kickoffAt: "2026-09-26T15:00:00.000Z",
+    venueName: "Wembley Hotel",
     scheduleStatus: "confirmed",
   },
   {
@@ -666,7 +685,7 @@ export const OFFICIAL_2026_FIXTURES = [
     awayTeamKey: "ace-fc",
     sourceHomeName: "Rock FC",
     sourceAwayName: "Ace FC",
-    kickoffAt: "2026-09-20T13:00:00.000Z",
+    kickoffAt: "2026-09-26T14:00:00.000Z",
     venueName: "Wembley Hotel",
     scheduleStatus: "confirmed",
   },
@@ -678,8 +697,8 @@ export const OFFICIAL_2026_FIXTURES = [
     awayTeamKey: "mrphil-photos",
     sourceHomeName: "Padre FC",
     sourceAwayName: "MrPhil Photos",
-    kickoffAt: "2026-09-20T14:00:00.000Z",
-    venueName: "Eclipse Arena",
+    kickoffAt: "2026-09-06T15:00:00.000Z",
+    venueName: "Wembley Hotel",
     scheduleStatus: "confirmed",
   },
   {
@@ -690,19 +709,19 @@ export const OFFICIAL_2026_FIXTURES = [
     awayTeamKey: "golden-boys-of-kibang",
     sourceHomeName: "Samba Boys",
     sourceAwayName: "Golden Boys of Kibang",
-    kickoffAt: "2026-09-20T14:00:00.000Z",
-    venueName: "Tribu Arena",
+    kickoffAt: "2026-09-06T13:00:00.000Z",
+    venueName: "Wembley Hotel",
     scheduleStatus: "confirmed",
   },
   {
     officialNumber: 41,
     groupKey: "A",
     sourcePot: "Pot 1",
-    homeTeamKey: "success-fc",
-    awayTeamKey: "lala-brothers",
-    sourceHomeName: "Success Fc",
-    sourceAwayName: "Lala Brothers",
-    kickoffAt: "2026-09-20T14:00:00.000Z",
+    homeTeamKey: "lala-brothers",
+    awayTeamKey: "success-fc",
+    sourceHomeName: "Lala Brothers",
+    sourceAwayName: "Success",
+    kickoffAt: "2026-09-06T14:00:00.000Z",
     venueName: "Wembley Hotel",
     scheduleStatus: "confirmed",
   },
@@ -712,10 +731,10 @@ export const OFFICIAL_2026_FIXTURES = [
     sourcePot: "Pot 1",
     homeTeamKey: "tribu-hotel-fc",
     awayTeamKey: "smooth-citizens",
-    sourceHomeName: "Tribu Hotel Fc",
+    sourceHomeName: "Tribu Hotel",
     sourceAwayName: "Smooth Citizens",
     kickoffAt: "2026-09-20T15:00:00.000Z",
-    venueName: "Tribu Arena",
+    venueName: "Wembley Hotel",
     scheduleStatus: "confirmed",
   },
 ] as const satisfies readonly Official2026Fixture[];
@@ -757,6 +776,7 @@ const publicationPayload = {
   sourceByteLength: OFFICIAL_2026_SOURCE_BYTE_LENGTH,
   timeZone: OFFICIAL_2026_TIME_ZONE,
   openerSupplement: OFFICIAL_2026_OPENER_SUPPLEMENT,
+  masterReschedule: OFFICIAL_2026_MASTER_RESCHEDULE,
   teams: OFFICIAL_2026_TEAMS,
   venues: OFFICIAL_2026_VENUES,
   fixtures: OFFICIAL_2026_FIXTURES,
@@ -864,7 +884,6 @@ export const assertOfficial2026FixtureManifestIntegrity =
     const occupiedVenueSlots = new Set<string>();
     let confirmedFixtureCount = 0;
     let pendingFixtureCount = 0;
-    let previousConfirmedKickoff = 0;
 
     for (const fixture of OFFICIAL_2026_FIXTURES as readonly Official2026Fixture[]) {
       const home = getOfficial2026TeamDefinition(fixture.homeTeamKey);
@@ -927,13 +946,6 @@ export const assertOfficial2026FixtureManifestIntegrity =
           `Fixture ${fixture.officialNumber} does not use a canonical ISO instant.`,
         );
       }
-      if (kickoff.getTime() < previousConfirmedKickoff) {
-        throw new Error(
-          "Confirmed fixtures must remain in chronological document order.",
-        );
-      }
-      previousConfirmedKickoff = kickoff.getTime();
-
       const local = localDateAndHour(fixture.kickoffAt);
       const venue = OFFICIAL_2026_VENUES.find(
         (candidate) => candidate.documentName === fixture.venueName,
@@ -962,6 +974,15 @@ export const assertOfficial2026FixtureManifestIntegrity =
         );
       }
       occupiedVenueSlots.add(venueSlotKey);
+      if (
+        fixture.officialNumber > 1 &&
+        fixture.venueName !== "Tribu Arena" &&
+        fixture.venueName !== "Wembley Hotel"
+      ) {
+        throw new Error(
+          `Remaining official fixture ${fixture.officialNumber} must use Tribu Arena or Wembley Hotel.`,
+        );
+      }
     }
 
     if (confirmedFixtureCount !== 42 || pendingFixtureCount !== 0) {
