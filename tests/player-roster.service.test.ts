@@ -25,8 +25,8 @@ jest.mock('@/services/team-lifecycle.service', () => ({
   fenceTeamLifecycle: jest.fn().mockResolvedValue({ _id: 'team' }),
 }));
 
-jest.mock('@/services/womens-late-roster.service', () => {
-  class WomensLateRosterError extends Error {
+jest.mock('@/services/open-published-late-roster.service', () => {
+  class OpenPublishedLateRosterError extends Error {
     constructor(
       message: string,
       public readonly statusCode: number,
@@ -36,19 +36,19 @@ jest.mock('@/services/womens-late-roster.service', () => {
     }
   }
   return {
-    enrollPlayerInUnstartedWomensCompetitions: jest.fn().mockResolvedValue({
+    enrollPlayerInOpenPublishedCompetitions: jest.fn().mockResolvedValue({
       enrolledTournamentIds: [],
       alreadyEnrolledTournamentIds: [],
       excludedTournamentIds: [],
     }),
-    WomensLateRosterError,
+    OpenPublishedLateRosterError,
   };
 });
 
 import mongoose from 'mongoose';
 import Player from '@/models/player.model';
 import { fenceTeamLifecycle } from '@/services/team-lifecycle.service';
-import { enrollPlayerInUnstartedWomensCompetitions } from '@/services/womens-late-roster.service';
+import { enrollPlayerInOpenPublishedCompetitions } from '@/services/open-published-late-roster.service';
 import {
   createPlayerInAvailableRosterSlot,
   MAX_TEAM_ROSTER_SIZE,
@@ -67,8 +67,8 @@ const mockedFenceTeamLifecycle = fenceTeamLifecycle as jest.MockedFunction<
   typeof fenceTeamLifecycle
 >;
 const mockedLateEnrollment =
-  enrollPlayerInUnstartedWomensCompetitions as jest.MockedFunction<
-    typeof enrollPlayerInUnstartedWomensCompetitions
+  enrollPlayerInOpenPublishedCompetitions as jest.MockedFunction<
+    typeof enrollPlayerInOpenPublishedCompetitions
   >;
 const mockedStartSession = mongoose.startSession as jest.MockedFunction<
   typeof mongoose.startSession
@@ -130,7 +130,7 @@ describe('atomic team roster slot allocation', () => {
     expect(mockedFenceTeamLifecycle).toHaveBeenCalledWith('team-1', expect.anything());
   });
 
-  it('captures a new women player only after taking the shared Team lifecycle fence', async () => {
+  it('captures a new player only after taking the shared Team lifecycle fence', async () => {
     const created = { _id: 'player-2', __v: 0 };
     const callOrder: string[] = [];
     mockedFenceTeamLifecycle.mockImplementationOnce(async () => {
@@ -163,7 +163,7 @@ describe('atomic team roster slot allocation', () => {
     );
   });
 
-  it('does not run women late-enrollment queries for a men player create', async () => {
+  it('late-enrolls a men player after taking the shared Team lifecycle fence', async () => {
     mockedFenceTeamLifecycle.mockResolvedValueOnce({
       _id: 'team-1',
       division: CompetitionDivision.MEN,
@@ -172,7 +172,12 @@ describe('atomic team roster slot allocation', () => {
 
     await createPlayerInAvailableRosterSlot({ teamId: 'team-1', name: 'Ada' });
 
-    expect(mockedLateEnrollment).not.toHaveBeenCalled();
+    expect(mockedLateEnrollment).toHaveBeenCalledWith(
+      'player-2',
+      'team-1',
+      0,
+      session
+    );
   });
 
   it('migrates legacy slots and rejects an eleventh active player without inserting', async () => {
@@ -216,7 +221,7 @@ describe('atomic team roster slot allocation', () => {
     );
   });
 
-  it('late-enrolls an eligible same-division women transfer inside the fenced transaction', async () => {
+  it('late-enrolls an eligible same-division transfer inside the fenced transaction', async () => {
     mockedFenceTeamLifecycle.mockResolvedValue({
       _id: 'team',
       division: CompetitionDivision.WOMEN,

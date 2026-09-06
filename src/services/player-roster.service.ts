@@ -7,9 +7,9 @@ import {
 } from '@/models/competition-division';
 import { fenceTeamLifecycle } from '@/services/team-lifecycle.service';
 import {
-  enrollPlayerInUnstartedWomensCompetitions,
-  WomensLateRosterError,
-} from '@/services/womens-late-roster.service';
+  enrollPlayerInOpenPublishedCompetitions,
+  OpenPublishedLateRosterError,
+} from '@/services/open-published-late-roster.service';
 import { hasErrorCode } from '@/utils/http-error.util';
 
 export const MAX_TEAM_ROSTER_SIZE = 10;
@@ -144,7 +144,7 @@ export const createPlayerInAvailableRosterSlot = async (
       await session.withTransaction(async () => {
         createdPlayer = undefined;
         rosterIsFull = false;
-        const team = await assertTeamAvailable(teamId, session);
+        await assertTeamAvailable(teamId, session);
         const plan = await normalizeActiveRosterSlots(teamId, session);
         if (plan.activePlayerCount >= MAX_TEAM_ROSTER_SIZE || !plan.availableSlot) {
           // Commit any safe legacy-slot migration, then report the cap without
@@ -157,20 +157,18 @@ export const createPlayerInAvailableRosterSlot = async (
           teamId,
           rosterSlot: plan.availableSlot,
         }).save({ session });
-        if (resolveCompetitionDivision(team.division) === CompetitionDivision.WOMEN) {
-          const enrollment = await enrollPlayerInUnstartedWomensCompetitions(
-            createdPlayer._id,
-            teamId,
-            playerDocumentVersion(createdPlayer),
-            session
-          );
-          // A freshly-saved document includes select:false fields in its JSON
-          // representation. Keep that internal value accurate if the admin
-          // response serializes this instance instead of re-querying it.
-          if (enrollment.enrolledTournamentIds.length > 0) {
-            createdPlayer.competitionRosterRevision =
-              (createdPlayer.competitionRosterRevision ?? 0) + 1;
-          }
+        const enrollment = await enrollPlayerInOpenPublishedCompetitions(
+          createdPlayer._id,
+          teamId,
+          playerDocumentVersion(createdPlayer),
+          session
+        );
+        // A freshly-saved document includes select:false fields in its JSON
+        // representation. Keep that internal value accurate if the admin
+        // response serializes this instance instead of re-querying it.
+        if (enrollment.enrolledTournamentIds.length > 0) {
+          createdPlayer.competitionRosterRevision =
+            (createdPlayer.competitionRosterRevision ?? 0) + 1;
         }
       });
       if (rosterIsFull) throw rosterFullError();
@@ -183,7 +181,7 @@ export const createPlayerInAvailableRosterSlot = async (
       }
       return createdPlayer;
     } catch (error: unknown) {
-      if (error instanceof WomensLateRosterError) {
+      if (error instanceof OpenPublishedLateRosterError) {
         throw new PlayerRosterError(error.message, error.statusCode, error.code);
       }
       if (hasErrorCode(error, 11000) && attempt < MAX_SLOT_ALLOCATION_ATTEMPTS) continue;
@@ -251,8 +249,8 @@ export const transferPlayerToAvailableRosterSlot = async (
           },
           { new: true, runValidators: true, session }
         );
-        if (transferredPlayer && destinationDivision === CompetitionDivision.WOMEN) {
-          await enrollPlayerInUnstartedWomensCompetitions(
+        if (transferredPlayer) {
+          await enrollPlayerInOpenPublishedCompetitions(
             transferredPlayer._id,
             destinationTeamId,
             playerDocumentVersion(transferredPlayer),
@@ -263,7 +261,7 @@ export const transferPlayerToAvailableRosterSlot = async (
       if (destinationRosterIsFull) return { player: null, rosterIsFull: true };
       return { player: transferredPlayer, rosterIsFull: false };
     } catch (error: unknown) {
-      if (error instanceof WomensLateRosterError) {
+      if (error instanceof OpenPublishedLateRosterError) {
         throw new PlayerRosterError(error.message, error.statusCode, error.code);
       }
       if (error instanceof PlayerRosterError && error.code === 'TEAM_ROSTER_FULL') {

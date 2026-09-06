@@ -255,6 +255,30 @@ The remaining men's updates, opener publication-hash refresh, schedule
 revision increment, and audit marker are committed in one MongoDB transaction.
 Women's matches are fingerprinted before and after and must be unchanged.
 
+## Guarded late roster enrollment for an already-published tournament
+
+Players added after fixtures were published used to stay on the team squad
+only. Goal scorers and assists require a row on the published tournament
+roster. Creating or transferring a player now adds that snapshot when the
+team still has an open roster slot.
+
+To enroll players who were already uploaded as future-only:
+
+```bash
+npm run db:late-roster:plan
+```
+
+After reviewing the printed list:
+
+```bash
+LATE_ROSTER_ALLOW_EXECUTE=true \
+LATE_ROSTER_ALLOW_PRODUCTION=true npm run db:late-roster:enroll -- \
+  --confirm=ENROLL-OPEN-PUBLISHED-LATE-ROSTER
+```
+
+Enrollment is additive. Completed tournaments, full 10-player snapshots, and
+existing roster rows are left unchanged.
+
 ## Guarded official women-tournament conversion
 
 `Team.division` and `Tournament.division` are explicit (`men` or `women`). A

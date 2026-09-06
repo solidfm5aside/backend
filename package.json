@@ -20,7 +20,9 @@
     "db:womens-tournament:plan": "ts-node -r tsconfig-paths/register src/scripts/convert-official-womens-tournament.ts",
     "db:womens-tournament:convert": "ts-node -r tsconfig-paths/register src/scripts/convert-official-womens-tournament.ts --execute",
     "db:womens-fixtures:plan": "ts-node -r tsconfig-paths/register src/scripts/import-official-womens-fixtures.ts",
-    "db:womens-fixtures:import": "ts-node -r tsconfig-paths/register src/scripts/import-official-womens-fixtures.ts --execute"
+    "db:womens-fixtures:import": "ts-node -r tsconfig-paths/register src/scripts/import-official-womens-fixtures.ts --execute",
+    "db:late-roster:plan": "ts-node -r tsconfig-paths/register src/scripts/enroll-open-published-late-roster.ts",
+    "db:late-roster:enroll": "ts-node -r tsconfig-paths/register src/scripts/enroll-open-published-late-roster.ts --execute"
   },
   "keywords": [],
   "author": "",
