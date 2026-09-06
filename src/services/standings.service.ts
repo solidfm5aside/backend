@@ -156,9 +156,10 @@ export const getTopScorers = async (tournamentId: string) => {
         (tournament.formatVersion === 3 &&
           tournament.format === TournamentFormat.SINGLE_TABLE_FINAL))
   );
-  const statsQuery = PlayerStats.find({ tournamentId })
-    .sort({ goals: -1, assists: -1 })
-    .limit(10);
+  const statsQuery = PlayerStats.find({
+    tournamentId,
+    goals: { $gt: 0 },
+  }).sort({ goals: -1, assists: -1, _id: 1 });
   if (!completedCompetition) {
     return await statsQuery
       .populate('playerId', 'name')
