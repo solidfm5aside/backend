@@ -45,6 +45,55 @@ import {
 import { getNextLegacyStage } from '@/utils/legacy-knockout.util';
 import { competitionLocalCalendarDay } from '@/utils/official-fixture.util';
 import { fenceTeamLifecycles } from './team-lifecycle.service';
+import { progressKnockout } from './competition.service';
+
+/**
+ * Progress only the men's quarter-final round after all four validated winners
+ * are present. The existing competition transaction owns bracket materialization.
+ * A concurrent attempt is safely rejected by its revision/idempotency guards.
+ */
+const advanceCompletedMensQuarterFinals = async (tournamentId: string): Promise<void> => {
+  const tournament = await Tournament.findById(tournamentId)
+    .select('formatVersion format division currentStage workflowState workflowRevision')
+    .lean();
+  if (
+    tournament?.formatVersion !== 2 ||
+    tournament.format !== TournamentFormat.TWO_GROUP_KNOCKOUT ||
+    resolveCompetitionDivision(tournament.division) !== CompetitionDivision.MEN ||
+    tournament.currentStage !== MatchStage.QUARTER_FINALS ||
+    tournament.workflowState !== CompetitionWorkflowState.KNOCKOUT_STAGE
+  ) return;
+  const bracket = await CompetitionBracket.findOne({ tournamentId }).select('_id').lean();
+  if (!bracket) return;
+  const matches = await Match.find({
+    tournamentId,
+    bracketId: bracket._id,
+    stage: MatchStage.QUARTER_FINALS,
+    isDeleted: false,
+  }).lean();
+  if (
+    matches.length !== 4 ||
+    !matches.every((match) =>
+      match.status === MatchStatus.COMPLETED &&
+      match.scheduleStatus === MatchScheduleStatus.CONFIRMED &&
+      Boolean(match.date && match.venue) &&
+      isValidKnockoutScoreWinner({
+        homeTeamId: match.homeTeam.toString(),
+        awayTeamId: match.awayTeam.toString(),
+        homeScore: match.homeScore,
+        awayScore: match.awayScore,
+        winnerTeamId: match.winner?.toString(),
+        shootoutScore: match.shootoutScore,
+      })
+    )
+  ) return;
+  await progressKnockout(
+    tournamentId,
+    tournament.workflowRevision,
+    undefined,
+    `auto-quarter-finals:${tournamentId}:${tournament.workflowRevision}`
+  );
+};
 
 const isKnockoutMatch = (match: IMatch): boolean =>
   match.stage !== MatchStage.LEAGUE && match.stage !== MatchStage.GROUP_STAGE;
@@ -405,6 +454,46 @@ export const updateMatchStatus = async (matchId: string, status: MatchStatus) =>
     // A retry of an already-committed status still rebuilds derived state. It
     // can therefore repair data written by an older non-transactional server.
     if (existing.status === status) {
+      // Repair previously completed men's knockout matches that have a decisive
+      // recorded score but no stored winner. Never rewrite goals or scores.
+      if (
+        status === MatchStatus.COMPLETED &&
+        isKnockoutMatch(existing) &&
+        !existing.winner &&
+        !existing.resultLockedAt &&
+        existing.homeScore !== existing.awayScore
+      ) {
+        const tournament = await Tournament.findById(existing.tournamentId)
+          .select('formatVersion format division')
+          .session(session)
+          .lean();
+        if (
+          tournament?.formatVersion === 2 &&
+          tournament.format === TournamentFormat.TWO_GROUP_KNOCKOUT &&
+          resolveCompetitionDivision(tournament.division) === CompetitionDivision.MEN
+        ) {
+          await assertBracketResultEditable(existing, session);
+          const winner = existing.homeScore > existing.awayScore
+            ? existing.homeTeam
+            : existing.awayTeam;
+          const repaired = await Match.findOneAndUpdate(
+            {
+              _id: existing._id,
+              status: MatchStatus.COMPLETED,
+              winner: { $exists: false },
+              homeScore: existing.homeScore,
+              awayScore: existing.awayScore,
+              __v: existing.__v ?? 0,
+              resultLockedAt: { $exists: false },
+            },
+            { $set: { winner }, $inc: { __v: 1 } },
+            { new: true, runValidators: true, session }
+          ).populate('homeTeam awayTeam', 'name logo');
+          if (!repaired) throw new Error('Knockout result changed during winner repair. Refresh and retry.');
+          await recalculateTournamentStats(existing.tournamentId.toString(), session);
+          return { match: repaired, changed: true };
+        }
+      }
       if (status === MatchStatus.LIVE) {
         await markManagedTournamentOngoing(existing.tournamentId, session);
       }
@@ -419,8 +508,25 @@ export const updateMatchStatus = async (matchId: string, status: MatchStatus) =>
     if (existing.resultLockedAt) {
       throw new Error('This match is locked because its result has already been consumed');
     }
-    if (isKnockout && status === MatchStatus.COMPLETED) {
+    // For men's physical knockout matches, a decisive score identifies the
+    // winner without requiring an additional administrator action.
+    // Tied results still require the explicit winner/shootout endpoint.
+    const tournamentForCompletion = isKnockout && status === MatchStatus.COMPLETED
+      ? await Tournament.findById(existing.tournamentId)
+          .select('formatVersion format division')
+          .session(session)
+          .lean()
+      : null;
+    const autoResolveMensKnockout = Boolean(
+      tournamentForCompletion?.formatVersion === 2 &&
+      tournamentForCompletion.format === TournamentFormat.TWO_GROUP_KNOCKOUT &&
+      resolveCompetitionDivision(tournamentForCompletion.division) === CompetitionDivision.MEN
+    );
+    if (isKnockout && status === MatchStatus.COMPLETED && !autoResolveMensKnockout) {
       throw new Error('Complete knockout matches through the winner endpoint');
+    }
+    if (autoResolveMensKnockout && existing.homeScore === existing.awayScore) {
+      throw new Error('A tied knockout match requires an explicit penalty shootout winner');
     }
 
     const requestsCompletedReopen =
@@ -462,7 +568,17 @@ export const updateMatchStatus = async (matchId: string, status: MatchStatus) =>
             $unset: { winner: 1, shootoutScore: 1 },
             $inc: { __v: 1 },
           }
-        : { $set: { status }, $inc: { __v: 1 } };
+        : {
+            $set: autoResolveMensKnockout
+              ? {
+                  status,
+                  winner: existing.homeScore > existing.awayScore
+                    ? existing.homeTeam
+                    : existing.awayTeam,
+                }
+              : { status },
+            $inc: { __v: 1 },
+          };
     const match = await Match.findOneAndUpdate(
       {
         _id: matchId,
@@ -490,7 +606,12 @@ export const updateMatchStatus = async (matchId: string, status: MatchStatus) =>
     return { match, changed: true };
   });
 
-  if (outcome.changed && outcome.match) broadcastMatchUpdate(matchId, outcome.match);
+  if (outcome.changed && outcome.match) {
+    broadcastMatchUpdate(matchId, outcome.match);
+    if (outcome.match.stage === MatchStage.QUARTER_FINALS) {
+      await advanceCompletedMensQuarterFinals(outcome.match.tournamentId.toString());
+    }
+  }
   return outcome.match;
 };
 
@@ -986,6 +1107,11 @@ export const updateMatchWinner = async (
     return { match, changed: true };
   });
 
-  if (outcome.changed) broadcastMatchUpdate(matchId, outcome.match);
+  if (outcome.changed) {
+    broadcastMatchUpdate(matchId, outcome.match);
+    if (outcome.match.stage === MatchStage.QUARTER_FINALS) {
+      await advanceCompletedMensQuarterFinals(outcome.match.tournamentId.toString());
+    }
+  }
   return outcome.match;
 };
