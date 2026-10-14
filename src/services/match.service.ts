@@ -45,6 +45,55 @@ import {
 import { getNextLegacyStage } from '@/utils/legacy-knockout.util';
 import { competitionLocalCalendarDay } from '@/utils/official-fixture.util';
 import { fenceTeamLifecycles } from './team-lifecycle.service';
+import { progressKnockout } from './competition.service';
+
+/**
+ * Progress only the men's quarter-final round after all four validated winners
+ * are present. The existing competition transaction owns bracket materialization.
+ * A concurrent attempt is safely rejected by its revision/idempotency guards.
+ */
+const advanceCompletedMensQuarterFinals = async (tournamentId: string): Promise<void> => {
+  const tournament = await Tournament.findById(tournamentId)
+    .select('formatVersion format division currentStage workflowState workflowRevision')
+    .lean();
+  if (
+    tournament?.formatVersion !== 2 ||
+    tournament.format !== TournamentFormat.TWO_GROUP_KNOCKOUT ||
+    resolveCompetitionDivision(tournament.division) !== CompetitionDivision.MEN ||
+    tournament.currentStage !== MatchStage.QUARTER_FINALS ||
+    tournament.workflowState !== CompetitionWorkflowState.KNOCKOUT_STAGE
+  ) return;
+  const bracket = await CompetitionBracket.findOne({ tournamentId }).select('_id').lean();
+  if (!bracket) return;
+  const matches = await Match.find({
+    tournamentId,
+    bracketId: bracket._id,
+    stage: MatchStage.QUARTER_FINALS,
+    isDeleted: false,
+  }).lean();
+  if (
+    matches.length !== 4 ||
+    !matches.every((match) =>
+      match.status === MatchStatus.COMPLETED &&
+      match.scheduleStatus === MatchScheduleStatus.CONFIRMED &&
+      Boolean(match.date && match.venue) &&
+      isValidKnockoutScoreWinner({
+        homeTeamId: match.homeTeam.toString(),
+        awayTeamId: match.awayTeam.toString(),
+        homeScore: match.homeScore,
+        awayScore: match.awayScore,
+        winnerTeamId: match.winner?.toString(),
+        shootoutScore: match.shootoutScore,
+      })
+    )
+  ) return;
+  await progressKnockout(
+    tournamentId,
+    tournament.workflowRevision,
+    undefined,
+    `auto-quarter-finals:${tournamentId}:${tournament.workflowRevision}`
+  );
+};
 
 const isKnockoutMatch = (match: IMatch): boolean =>
   match.stage !== MatchStage.LEAGUE && match.stage !== MatchStage.GROUP_STAGE;
@@ -557,7 +606,12 @@ export const updateMatchStatus = async (matchId: string, status: MatchStatus) =>
     return { match, changed: true };
   });
 
-  if (outcome.changed && outcome.match) broadcastMatchUpdate(matchId, outcome.match);
+  if (outcome.changed && outcome.match) {
+    broadcastMatchUpdate(matchId, outcome.match);
+    if (outcome.match.stage === MatchStage.QUARTER_FINALS) {
+      await advanceCompletedMensQuarterFinals(outcome.match.tournamentId.toString());
+    }
+  }
   return outcome.match;
 };
 
@@ -1053,6 +1107,11 @@ export const updateMatchWinner = async (
     return { match, changed: true };
   });
 
-  if (outcome.changed) broadcastMatchUpdate(matchId, outcome.match);
+  if (outcome.changed) {
+    broadcastMatchUpdate(matchId, outcome.match);
+    if (outcome.match.stage === MatchStage.QUARTER_FINALS) {
+      await advanceCompletedMensQuarterFinals(outcome.match.tournamentId.toString());
+    }
+  }
   return outcome.match;
 };
