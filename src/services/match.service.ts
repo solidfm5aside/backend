@@ -419,8 +419,25 @@ export const updateMatchStatus = async (matchId: string, status: MatchStatus) =>
     if (existing.resultLockedAt) {
       throw new Error('This match is locked because its result has already been consumed');
     }
-    if (isKnockout && status === MatchStatus.COMPLETED) {
+    // For men's physical knockout matches, a decisive score identifies the
+    // winner without requiring an additional administrator action.
+    // Tied results still require the explicit winner/shootout endpoint.
+    const tournamentForCompletion = isKnockout && status === MatchStatus.COMPLETED
+      ? await Tournament.findById(existing.tournamentId)
+          .select('formatVersion format division')
+          .session(session)
+          .lean()
+      : null;
+    const autoResolveMensKnockout = Boolean(
+      tournamentForCompletion?.formatVersion === 2 &&
+      tournamentForCompletion.format === TournamentFormat.TWO_GROUP_KNOCKOUT &&
+      resolveCompetitionDivision(tournamentForCompletion.division) === CompetitionDivision.MEN
+    );
+    if (isKnockout && status === MatchStatus.COMPLETED && !autoResolveMensKnockout) {
       throw new Error('Complete knockout matches through the winner endpoint');
+    }
+    if (autoResolveMensKnockout && existing.homeScore === existing.awayScore) {
+      throw new Error('A tied knockout match requires an explicit penalty shootout winner');
     }
 
     const requestsCompletedReopen =
@@ -462,7 +479,17 @@ export const updateMatchStatus = async (matchId: string, status: MatchStatus) =>
             $unset: { winner: 1, shootoutScore: 1 },
             $inc: { __v: 1 },
           }
-        : { $set: { status }, $inc: { __v: 1 } };
+        : {
+            $set: autoResolveMensKnockout
+              ? {
+                  status,
+                  winner: existing.homeScore > existing.awayScore
+                    ? existing.homeTeam
+                    : existing.awayTeam,
+                }
+              : { status },
+            $inc: { __v: 1 },
+          };
     const match = await Match.findOneAndUpdate(
       {
         _id: matchId,
