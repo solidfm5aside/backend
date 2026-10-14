@@ -405,6 +405,46 @@ export const updateMatchStatus = async (matchId: string, status: MatchStatus) =>
     // A retry of an already-committed status still rebuilds derived state. It
     // can therefore repair data written by an older non-transactional server.
     if (existing.status === status) {
+      // Repair previously completed men's knockout matches that have a decisive
+      // recorded score but no stored winner. Never rewrite goals or scores.
+      if (
+        status === MatchStatus.COMPLETED &&
+        isKnockoutMatch(existing) &&
+        !existing.winner &&
+        !existing.resultLockedAt &&
+        existing.homeScore !== existing.awayScore
+      ) {
+        const tournament = await Tournament.findById(existing.tournamentId)
+          .select('formatVersion format division')
+          .session(session)
+          .lean();
+        if (
+          tournament?.formatVersion === 2 &&
+          tournament.format === TournamentFormat.TWO_GROUP_KNOCKOUT &&
+          resolveCompetitionDivision(tournament.division) === CompetitionDivision.MEN
+        ) {
+          await assertBracketResultEditable(existing, session);
+          const winner = existing.homeScore > existing.awayScore
+            ? existing.homeTeam
+            : existing.awayTeam;
+          const repaired = await Match.findOneAndUpdate(
+            {
+              _id: existing._id,
+              status: MatchStatus.COMPLETED,
+              winner: { $exists: false },
+              homeScore: existing.homeScore,
+              awayScore: existing.awayScore,
+              __v: existing.__v ?? 0,
+              resultLockedAt: { $exists: false },
+            },
+            { $set: { winner }, $inc: { __v: 1 } },
+            { new: true, runValidators: true, session }
+          ).populate('homeTeam awayTeam', 'name logo');
+          if (!repaired) throw new Error('Knockout result changed during winner repair. Refresh and retry.');
+          await recalculateTournamentStats(existing.tournamentId.toString(), session);
+          return { match: repaired, changed: true };
+        }
+      }
       if (status === MatchStatus.LIVE) {
         await markManagedTournamentOngoing(existing.tournamentId, session);
       }
