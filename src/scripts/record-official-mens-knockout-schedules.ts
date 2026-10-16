@@ -53,7 +53,7 @@ async function main() {
       if (!wembley) await Venue.create([{ name: 'Wembley Arena', address: 'Trans Ekulu, Enugu', importance: 1 }], { session });
       for (const { m, official, alreadyCorrect } of planned) {
         if (alreadyCorrect) continue;
-        const result = await Match.updateOne({ _id: m._id, __v: m.__v, status: official.status, homeScore: official.homeScore,
+        const result = await Match.updateOne({ _id: m._id, __v: m.__v, status: m.status, homeScore: official.homeScore,
           awayScore: official.awayScore, scheduleStatus: MatchScheduleStatus.PENDING, date: null, venue: null },
           { $set: { date: new Date(official.date), venue: official.venue, scheduleStatus: MatchScheduleStatus.CONFIRMED,
             fixtureSourceReference: 'Official men’s semi-final/final schedule posters supplied by tournament owner on 2026-10-16; times Africa/Lagos' }, $inc: { __v: 1 } },
