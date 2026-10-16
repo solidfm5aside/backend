@@ -22,4 +22,5 @@ Apply the reviewed plan:
 npx ts-node -r tsconfig-paths/register src/scripts/record-official-mens-semifinals.ts --execute
 ```
 
-The importer does not run at server startup or during build. A normal backend deployment alone does not apply the data repair. After execution, verify the public matches endpoint returns two completed semi-finals with the exact scores and one scheduled final, and compare all previous men's and women's matches against the before snapshot. Open Results and Fixtures to verify placement. No production database connection or import was performed during preparation.
+The importer does not run at server startup or during build. A normal backend deployment alone does not apply the data repair. After execution, verify the public matches endpoint returns two completed semi-finals with the exact scores and one scheduled final, and compare all previous men's and women's matches against the before snapshot. Open Results and Fixtures to verify placement. Production dry-run and execution completed on 16 October 2026 through temporary release start commands. The normal start command was restored after the repair. The public API confirmed both completed results and the scheduled final; all 46 previous men’s match records and all three women’s match records were unchanged.
+
